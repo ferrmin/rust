@@ -75,9 +75,11 @@ impl AttributeKind {
             MustNotSupend { .. } => Yes,
             MustUse { .. } => Yes,
             Naked(..) => No,
+            NeedsAllocator => No,
             NoCore(..) => No,
             NoImplicitPrelude(..) => No,
             NoLink => No,
+            NoMain => No,
             NoMangle(..) => Yes, // Needed for rustdoc
             NoStd(..) => No,
             NonExhaustive(..) => Yes, // Needed for rustdoc
@@ -96,8 +98,12 @@ impl AttributeKind {
             PubTransparent(..) => Yes,
             RecursionLimit { .. } => No,
             Repr { .. } => No,
+            RustcAllocator => No,
+            RustcAllocatorZeroed => No,
+            RustcAllocatorZeroedVariant { .. } => Yes,
             RustcBuiltinMacro { .. } => Yes,
             RustcCoherenceIsCore(..) => No,
+            RustcDeallocator => No,
             RustcDumpDefParents => No,
             RustcDumpItemBounds => No,
             RustcDumpPredicates => No,
@@ -118,6 +124,7 @@ impl AttributeKind {
             RustcNoImplicitAutorefs => Yes,
             RustcObjectLifetimeDefault => No,
             RustcPassIndirectlyInNonRusticAbis(..) => No,
+            RustcReallocator => No,
             RustcScalableVector { .. } => Yes,
             RustcShouldNotBeCalledOnConstItems(..) => Yes,
             RustcSimdMonomorphizeLaneLimit(..) => Yes, // Affects layout computation, which needs to work cross-crate
