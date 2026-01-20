@@ -954,9 +954,6 @@ pub enum AttributeKind {
     /// Represents `#[rustc_legacy_const_generics]`
     RustcLegacyConstGenerics { fn_indexes: ThinVec<(usize, Span)>, attr_span: Span },
 
-    /// Represents `#[rustc_lint_diagnostics]`
-    RustcLintDiagnostics,
-
     /// Represents `#[rustc_lint_opt_deny_field_access]`
     RustcLintOptDenyFieldAccess { lint_message: Symbol },
 
@@ -981,8 +978,14 @@ pub enum AttributeKind {
     /// Represents `#[rustc_no_implicit_autorefs]`
     RustcNoImplicitAutorefs,
 
+    /// Represents `#[rustc_nounwind]`
+    RustcNounwind,
+
     /// Represents `#[rustc_object_lifetime_default]`.
     RustcObjectLifetimeDefault,
+
+    /// Represents `#[rustc_offload_kernel]`
+    RustcOffloadKernel,
 
     /// Represents `#[rustc_pass_indirectly_in_non_rustic_abis]`
     RustcPassIndirectlyInNonRusticAbis(Span),

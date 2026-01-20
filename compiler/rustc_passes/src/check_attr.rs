@@ -266,7 +266,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcNoImplicitAutorefs
                     | AttributeKind::RustcLayoutScalarValidRangeStart(..)
                     | AttributeKind::RustcLayoutScalarValidRangeEnd(..)
-                    | AttributeKind::RustcLintDiagnostics
                     | AttributeKind::RustcLintOptDenyFieldAccess { .. }
                     | AttributeKind::RustcLintOptTy
                     | AttributeKind::RustcLintQueryInstability
@@ -322,6 +321,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcAllocatorZeroedVariant { .. }
                     | AttributeKind::RustcDeallocator
                     | AttributeKind::RustcReallocator
+                    | AttributeKind::RustcNounwind
+                    | AttributeKind::RustcOffloadKernel
                 ) => { /* do nothing  */ }
                 Attribute::Unparsed(attr_item) => {
                     style = Some(attr_item.style);
@@ -390,7 +391,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_partition_reused
                             | sym::rustc_partition_codegened
                             | sym::rustc_expected_cgu_reuse
-                            | sym::rustc_nounwind
                             // crate-level attrs, are checked below
                             | sym::feature
                             | sym::register_tool
@@ -1691,7 +1691,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
 
             let hir_sig = tcx.hir_fn_sig_by_hir_id(hir_id);
             if let Some(hir_sig) = hir_sig {
-                #[allow(rustc::diagnostic_outside_of_impl)] // FIXME
                 match terr {
                     TypeError::ArgumentMutability(idx) | TypeError::ArgumentSorts(_, idx) => {
                         if let Some(ty) = hir_sig.decl.inputs.get(idx) {
