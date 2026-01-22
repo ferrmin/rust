@@ -687,6 +687,9 @@ pub enum AttributeKind {
     /// Represents `#[collapse_debuginfo]`.
     CollapseDebugInfo(CollapseMacroDebuginfo),
 
+    /// Represents `#[compiler_builtins]`.
+    CompilerBuiltins,
+
     /// Represents `#[rustc_confusables]`.
     Confusables {
         symbols: ThinVec<Symbol>,
@@ -728,9 +731,6 @@ pub enum AttributeKind {
     /// Represents [`#[deprecated]`](https://doc.rust-lang.org/stable/reference/attributes/diagnostics.html#the-deprecated-attribute).
     Deprecation { deprecation: Deprecation, span: Span },
 
-    /// Represents `#[rustc_do_not_implement_via_object]`.
-    DoNotImplementViaObject(Span),
-
     /// Represents `#[diagnostic::do_not_recommend]`.
     DoNotRecommend { attr_span: Span },
 
@@ -745,6 +745,9 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_dummy]`.
     Dummy,
+
+    /// Represents `#[rustc_dyn_incompatible_trait]`.
+    DynIncompatibleTrait(Span),
 
     /// Implementation detail of `#[eii]`
     EiiDeclaration(EiiDecl),
@@ -843,6 +846,12 @@ pub enum AttributeKind {
     /// Represents `#[needs_allocator]`
     NeedsAllocator,
 
+    /// Represents `#[needs_panic_runtime]`
+    NeedsPanicRuntime,
+
+    /// Represents `#[no_builtins]`
+    NoBuiltins,
+
     /// Represents `#[no_core]`
     NoCore(Span),
 
@@ -873,11 +882,17 @@ pub enum AttributeKind {
     /// Represents `#[optimize(size|speed)]`
     Optimize(OptimizeAttr, Span),
 
+    /// Represents `#[panic_runtime]`
+    PanicRuntime,
+
     /// Represents `#[rustc_paren_sugar]`.
     ParenSugar(Span),
 
     /// Represents `#[rustc_pass_by_value]` (used by the `rustc_pass_by_value` lint).
     PassByValue(Span),
+
+    /// Represents `#[patchable_function_entry]`
+    PatchableFunctionEntry { prefix: u8, entry: u8 },
 
     /// Represents `#[path]`
     Path(Symbol, Span),
@@ -899,6 +914,9 @@ pub enum AttributeKind {
 
     /// Represents `#[proc_macro_derive]`
     ProcMacroDerive { trait_name: Symbol, helper_attrs: ThinVec<Symbol>, span: Span },
+
+    /// Represents `#[profiler_runtime]`
+    ProfilerRuntime,
 
     /// Represents `#[rustc_pub_transparent]` (used by the `repr_transparent_external_private_fields` lint).
     PubTransparent(Span),
@@ -1006,6 +1024,12 @@ pub enum AttributeKind {
 
     /// Represents `#[rustc_simd_monomorphize_lane_limit = "N"]`.
     RustcSimdMonomorphizeLaneLimit(Limit),
+
+    /// Represents `#[rustc_variance]`
+    RustcVariance,
+
+    /// Represents `#[rustc_variance_of_opaques]`
+    RustcVarianceOfOpaques,
 
     /// Represents `#[sanitize]`
     ///

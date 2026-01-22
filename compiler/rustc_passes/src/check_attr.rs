@@ -244,7 +244,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::SkipDuringMethodDispatch { .. }
                     | AttributeKind::Coinductive(..)
                     | AttributeKind::DenyExplicitImpl(..)
-                    | AttributeKind::DoNotImplementViaObject(..)
+                    | AttributeKind::DynIncompatibleTrait(..)
                     | AttributeKind::SpecializationTrait(..)
                     | AttributeKind::UnsafeSpecializationMarker(..)
                     | AttributeKind::ParenSugar(..)
@@ -274,6 +274,8 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcScalableVector { .. }
                     | AttributeKind::RustcSimdMonomorphizeLaneLimit(..)
                     | AttributeKind::RustcShouldNotBeCalledOnConstItems(..)
+                    | AttributeKind::RustcVariance
+                    | AttributeKind::RustcVarianceOfOpaques
                     | AttributeKind::ExportStable
                     | AttributeKind::FfiConst(..)
                     | AttributeKind::UnstableFeatureBound(..)
@@ -297,6 +299,11 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::NoCore { .. }
                     | AttributeKind::NoStd { .. }
                     | AttributeKind::NoMain
+                    | AttributeKind::CompilerBuiltins
+                    | AttributeKind::PanicRuntime
+                    | AttributeKind::NeedsPanicRuntime
+                    | AttributeKind::ProfilerRuntime
+                    | AttributeKind::NoBuiltins
                     | AttributeKind::ObjcClass { .. }
                     | AttributeKind::ObjcSelector { .. }
                     | AttributeKind::RustcCoherenceIsCore(..)
@@ -323,6 +330,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                     | AttributeKind::RustcReallocator
                     | AttributeKind::RustcNounwind
                     | AttributeKind::RustcOffloadKernel
+                    | AttributeKind::PatchableFunctionEntry { .. }
                 ) => { /* do nothing  */ }
                 Attribute::Unparsed(attr_item) => {
                     style = Some(attr_item.style);
@@ -348,7 +356,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::deny
                             | sym::forbid
                             // need to be fixed
-                            | sym::patchable_function_entry // FIXME(patchable_function_entry)
                             | sym::deprecated_safe // FIXME(deprecated_safe)
                             // internal
                             | sym::prelude_import
@@ -378,8 +385,6 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_capture_analysis
                             | sym::rustc_regions
                             | sym::rustc_strict_coherence
-                            | sym::rustc_variance
-                            | sym::rustc_variance_of_opaques
                             | sym::rustc_hidden_type_of_opaques
                             | sym::rustc_mir
                             | sym::rustc_effective_visibility
@@ -397,13 +402,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
                             | sym::rustc_no_implicit_bounds
                             | sym::test_runner
                             | sym::reexport_test_harness_main
-                            | sym::no_main
-                            | sym::no_builtins
                             | sym::crate_type
-                            | sym::compiler_builtins
-                            | sym::profiler_runtime
-                            | sym::needs_panic_runtime
-                            | sym::panic_runtime
                             | sym::rustc_preserve_ub_checks,
                             ..
                         ] => {}
