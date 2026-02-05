@@ -8,6 +8,7 @@
 
 // tidy-alphabetical-start
 #![allow(internal_features)]
+#![cfg_attr(bootstrap, feature(ptr_as_ref_unchecked))]
 #![feature(arbitrary_self_types)]
 #![feature(assert_matches)]
 #![feature(box_patterns)]
@@ -18,7 +19,6 @@
 #![feature(default_field_values)]
 #![feature(if_let_guard)]
 #![feature(iter_intersperse)]
-#![feature(ptr_as_ref_unchecked)]
 #![feature(rustc_attrs)]
 #![feature(trim_prefix_suffix)]
 #![recursion_limit = "256"]
@@ -97,8 +97,6 @@ pub mod rustdoc;
 pub use macros::registered_tools_ast;
 
 use crate::ref_mut::{CmCell, CmRefCell};
-
-rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum Determinacy {
@@ -969,6 +967,7 @@ enum AmbiguityWarning {
 
 struct AmbiguityError<'ra> {
     kind: AmbiguityKind,
+    ambig_vis: Option<(Visibility, Visibility)>,
     ident: Ident,
     b1: Decl<'ra>,
     b2: Decl<'ra>,
@@ -2087,6 +2086,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         if let Some(b2) = used_decl.ambiguity.get() {
             let ambiguity_error = AmbiguityError {
                 kind: AmbiguityKind::GlobVsGlob,
+                ambig_vis: None,
                 ident,
                 b1: used_decl,
                 b2,
@@ -2556,6 +2556,8 @@ struct Finalize {
     used: Used = Used::Other,
     /// Finalizing early or late resolution.
     stage: Stage = Stage::Early,
+    /// Nominal visibility of the import item, in case we are resolving an import's final segment.
+    import_vis: Option<Visibility> = None,
 }
 
 impl Finalize {
