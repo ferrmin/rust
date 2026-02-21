@@ -1670,6 +1670,11 @@ impl<'test> TestCx<'test> {
                 if self.props.force_host { &*self.config.host } else { &*self.config.target };
 
             compiler.arg(&format!("--target={}", target));
+            if target.ends_with(".json") {
+                // `-Zunstable-options` is necessary when compiletest is running with custom targets
+                // (such as synthetic targets used to bless mir-opt tests).
+                compiler.arg("-Zunstable-options");
+            }
         }
         self.set_revision_flags(&mut compiler);
 
@@ -2379,15 +2384,22 @@ impl<'test> TestCx<'test> {
             _ => {}
         };
 
-        let stderr = if self.force_color_svg() {
-            anstyle_svg::Term::new().render_svg(&proc_res.stderr)
-        } else if explicit_format {
-            proc_res.stderr.clone()
-        } else {
-            json::extract_rendered(&proc_res.stderr)
-        };
+        let stderr;
+        let normalized_stderr;
 
-        let normalized_stderr = self.normalize_output(&stderr, &self.props.normalize_stderr);
+        if self.force_color_svg() {
+            let normalized = self.normalize_output(&proc_res.stderr, &self.props.normalize_stderr);
+            stderr = anstyle_svg::Term::new().render_svg(&normalized);
+            normalized_stderr = stderr.clone();
+        } else {
+            stderr = if explicit_format {
+                proc_res.stderr.clone()
+            } else {
+                json::extract_rendered(&proc_res.stderr)
+            };
+            normalized_stderr = self.normalize_output(&stderr, &self.props.normalize_stderr);
+        }
+
         let mut errors = 0;
         match output_kind {
             TestOutput::Compile => {

@@ -2184,6 +2184,9 @@ Please disable assertions with `rust.debug-assertions = false`.
         for flag in targetflags {
             cmd.arg("--target-rustcflags").arg(flag);
         }
+        if target.is_synthetic() {
+            cmd.arg("--target-rustcflags").arg("-Zunstable-options");
+        }
 
         cmd.arg("--python").arg(
             builder.config.python.as_ref().expect("python is required for running rustdoc tests"),
@@ -3156,7 +3159,7 @@ impl Step for CrateRustdoc {
     const IS_HOST: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.paths(&["src/librustdoc", "src/tools/rustdoc"])
+        run.path("src/librustdoc").path("src/tools/rustdoc")
     }
 
     fn is_default_step(_builder: &Builder<'_>) -> bool {
@@ -3497,7 +3500,7 @@ impl Step for BootstrapPy {
         // Bootstrap tests might not be perfectly self-contained and can depend
         // on the environment, so only run them by default in CI, not locally.
         // See `test::Bootstrap::should_run`.
-        builder.config.is_running_on_ci
+        builder.config.is_running_on_ci()
     }
 
     fn make_run(run: RunConfig<'_>) {
@@ -3536,7 +3539,7 @@ impl Step for Bootstrap {
         // Bootstrap tests might not be perfectly self-contained and can depend on the external
         // environment, submodules that are checked out, etc.
         // Therefore we only run them by default on CI.
-        builder.config.is_running_on_ci
+        builder.config.is_running_on_ci()
     }
 
     /// Tests the build system itself.
@@ -3817,7 +3820,7 @@ impl Step for CodegenCranelift {
     const IS_HOST: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.paths(&["compiler/rustc_codegen_cranelift"])
+        run.path("compiler/rustc_codegen_cranelift")
     }
 
     fn is_default_step(_builder: &Builder<'_>) -> bool {
@@ -3938,7 +3941,7 @@ impl Step for CodegenGCC {
     const IS_HOST: bool = true;
 
     fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
-        run.paths(&["compiler/rustc_codegen_gcc"])
+        run.path("compiler/rustc_codegen_gcc")
     }
 
     fn is_default_step(_builder: &Builder<'_>) -> bool {

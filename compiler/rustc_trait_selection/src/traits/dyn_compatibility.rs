@@ -7,10 +7,9 @@
 use std::ops::ControlFlow;
 
 use rustc_errors::FatalError;
-use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
-use rustc_hir::{self as hir, LangItem, find_attr};
+use rustc_hir::{self as hir, LangItem};
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{
     self, EarlyBinder, GenericArgs, Ty, TyCtxt, TypeFoldable, TypeFolder, TypeSuperFoldable,
@@ -315,6 +314,11 @@ pub fn dyn_compatibility_violations_for_assoc_item(
     trait_def_id: DefId,
     item: ty::AssocItem,
 ) -> Vec<DynCompatibilityViolation> {
+    // `final` assoc functions don't prevent a trait from being dyn-compatible
+    if tcx.defaultness(item.def_id).is_final() {
+        return Vec::new();
+    }
+
     // Any item that has a `Self: Sized` requisite is otherwise exempt from the regulations.
     if tcx.generics_require_sized_self(item.def_id) {
         return Vec::new();
@@ -333,7 +337,7 @@ pub fn dyn_compatibility_violations_for_assoc_item(
             if tcx.features().min_generic_const_args() {
                 if !tcx.generics_of(item.def_id).is_own_empty() {
                     errors.push(AssocConstViolation::Generic);
-                } else if !find_attr!(tcx.get_all_attrs(item.def_id), AttributeKind::TypeConst(_)) {
+                } else if !tcx.is_type_const(item.def_id) {
                     errors.push(AssocConstViolation::NonType);
                 }
 

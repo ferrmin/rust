@@ -566,7 +566,7 @@ extern "C" LLVMRustResult LLVMRustOptimize(
     LLVMModuleRef ModuleRef, LLVMTargetMachineRef TMRef,
     LLVMRustPassBuilderOptLevel OptLevelRust, LLVMRustOptStage OptStage,
     bool IsLinkerPluginLTO, bool NoPrepopulatePasses, bool VerifyIR,
-    bool LintIR, LLVMRustThinLTOBuffer **ThinLTOBufferRef, bool EmitThinLTO,
+    bool LintIR, LLVMRustThinLTOBuffer **ThinLTOBufferRef,
     bool EmitThinLTOSummary, bool MergeFunctions, bool UnrollLoops,
     bool SLPVectorize, bool LoopVectorize, bool DisableSimplifyLibCalls,
     bool EmitLifetimeMarkers, registerEnzymeAndPassPipelineFn EnzymePtr,
@@ -808,31 +808,26 @@ extern "C" LLVMRustResult LLVMRustOptimize(
   }
 
   ModulePassManager MPM;
-  bool NeedThinLTOBufferPasses = EmitThinLTO;
+  bool NeedThinLTOBufferPasses = true;
   auto ThinLTOBuffer = std::make_unique<LLVMRustThinLTOBuffer>();
   raw_string_ostream ThinLTODataOS(ThinLTOBuffer->data);
   raw_string_ostream ThinLinkDataOS(ThinLTOBuffer->thin_link_data);
+  bool IsLTO = OptStage == LLVMRustOptStage::ThinLTO ||
+               OptStage == LLVMRustOptStage::FatLTO;
   if (!NoPrepopulatePasses) {
+    for (const auto &C : PipelineStartEPCallbacks)
+      PB.registerPipelineStartEPCallback(C);
+    for (const auto &C : OptimizerLastEPCallbacks)
+      PB.registerOptimizerLastEPCallback(C);
+
     // The pre-link pipelines don't support O0 and require using
     // buildO0DefaultPipeline() instead. At the same time, the LTO pipelines do
     // support O0 and using them is required.
-    bool IsLTO = OptStage == LLVMRustOptStage::ThinLTO ||
-                 OptStage == LLVMRustOptStage::FatLTO;
     if (OptLevel == OptimizationLevel::O0 && !IsLTO) {
-      for (const auto &C : PipelineStartEPCallbacks)
-        PB.registerPipelineStartEPCallback(C);
-      for (const auto &C : OptimizerLastEPCallbacks)
-        PB.registerOptimizerLastEPCallback(C);
-
       // We manually schedule ThinLTOBufferPasses below, so don't pass the value
       // to enable it here.
       MPM = PB.buildO0DefaultPipeline(OptLevel);
     } else {
-      for (const auto &C : PipelineStartEPCallbacks)
-        PB.registerPipelineStartEPCallback(C);
-      for (const auto &C : OptimizerLastEPCallbacks)
-        PB.registerOptimizerLastEPCallback(C);
-
       switch (OptStage) {
       case LLVMRustOptStage::PreLinkNoLTO:
         if (ThinLTOBufferRef) {
@@ -840,12 +835,8 @@ extern "C" LLVMRustResult LLVMRustOptimize(
           // bitcode for embedding is obtained after performing
           // `ThinLTOPreLinkDefaultPipeline`.
           MPM.addPass(PB.buildThinLTOPreLinkDefaultPipeline(OptLevel));
-          if (EmitThinLTO) {
-            MPM.addPass(ThinLTOBitcodeWriterPass(
-                ThinLTODataOS, EmitThinLTOSummary ? &ThinLinkDataOS : nullptr));
-          } else {
-            MPM.addPass(BitcodeWriterPass(ThinLTODataOS));
-          }
+          MPM.addPass(ThinLTOBitcodeWriterPass(
+              ThinLTODataOS, EmitThinLTOSummary ? &ThinLinkDataOS : nullptr));
           *ThinLTOBufferRef = ThinLTOBuffer.release();
           MPM.addPass(PB.buildModuleOptimizationPipeline(
               OptLevel, ThinOrFullLTOPhase::None));
@@ -870,6 +861,7 @@ extern "C" LLVMRustResult LLVMRustOptimize(
         break;
       case LLVMRustOptStage::FatLTO:
         MPM = PB.buildLTODefaultPipeline(OptLevel, nullptr);
+        NeedThinLTOBufferPasses = false;
         break;
       }
     }
@@ -895,9 +887,11 @@ extern "C" LLVMRustResult LLVMRustOptimize(
     MPM.addPass(CanonicalizeAliasesPass());
     MPM.addPass(NameAnonGlobalPass());
   }
-  // For `-Copt-level=0`, ThinLTO, or LTO.
+  // For `-Copt-level=0`, and the pre-link fat/thin LTO stages.
   if (ThinLTOBufferRef && *ThinLTOBufferRef == nullptr) {
-    if (EmitThinLTO) {
+    // thin lto summaries prevent fat lto, so do not emit them if fat
+    // lto is requested. See PR #136840 for background information.
+    if (OptStage != LLVMRustOptStage::PreLinkFatLTO) {
       MPM.addPass(ThinLTOBitcodeWriterPass(
           ThinLTODataOS, EmitThinLTOSummary ? &ThinLinkDataOS : nullptr));
     } else {
@@ -908,7 +902,10 @@ extern "C" LLVMRustResult LLVMRustOptimize(
 
   // now load "-enzyme" pass:
   // With dlopen, ENZYME macro may not be defined, so check EnzymePtr directly
-  if (EnzymePtr) {
+  // In the case of debug builds with multiple codegen units, we might not
+  // have all function definitions available during the early compiler
+  // invocations. We therefore wait for the final lto step to run Enzyme.
+  if (EnzymePtr && IsLTO) {
 
     if (PrintBeforeEnzyme) {
       // Handle the Rust flag `-Zautodiff=PrintModBefore`.
@@ -929,6 +926,7 @@ extern "C" LLVMRustResult LLVMRustOptimize(
       MPM.addPass(PrintModulePass(outs(), Banner, true, false));
     }
   }
+
   if (PrintPasses) {
     // Print all passes from the PM:
     std::string Pipeline;

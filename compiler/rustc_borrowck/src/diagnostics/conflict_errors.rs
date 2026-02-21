@@ -535,7 +535,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 if let Some(pat) = finder.parent_pat {
                     sugg.insert(0, (pat.span.shrink_to_lo(), "ref ".to_string()));
                 }
-                err.multipart_suggestion_verbose(
+                err.multipart_suggestion(
                     "borrow this binding in the pattern to avoid moving the value",
                     sugg,
                     Applicability::MachineApplicable,
@@ -1256,7 +1256,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 self.suggest_cloning_inner(err, ty, expr);
             }
         } else if let ty::Adt(def, args) = ty.kind()
-            && def.did().as_local().is_some()
+            && let Some(local_did) = def.did().as_local()
             && def.variants().iter().all(|variant| {
                 variant
                     .fields
@@ -1266,12 +1266,50 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         {
             let ty_span = self.infcx.tcx.def_span(def.did());
             let mut span: MultiSpan = ty_span.into();
-            span.push_span_label(ty_span, "consider implementing `Clone` for this type");
-            span.push_span_label(expr.span, "you could clone this value");
-            err.span_note(
-                span,
-                format!("if `{ty}` implemented `Clone`, you could clone the value"),
+            let mut derive_clone = false;
+            self.infcx.tcx.for_each_relevant_impl(
+                self.infcx.tcx.lang_items().clone_trait().unwrap(),
+                ty,
+                |def_id| {
+                    if self.infcx.tcx.is_automatically_derived(def_id) {
+                        derive_clone = true;
+                        span.push_span_label(
+                            self.infcx.tcx.def_span(def_id),
+                            "derived `Clone` adds implicit bounds on type parameters",
+                        );
+                        if let Some(generics) = self.infcx.tcx.hir_get_generics(local_did) {
+                            for param in generics.params {
+                                if let hir::GenericParamKind::Type { .. } = param.kind {
+                                    span.push_span_label(
+                                        param.span,
+                                        format!(
+                                            "introduces an implicit `{}: Clone` bound",
+                                            param.name.ident()
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                },
             );
+            let msg = if !derive_clone {
+                span.push_span_label(
+                    ty_span,
+                    format!(
+                        "consider {}implementing `Clone` for this type",
+                        if derive_clone { "manually " } else { "" }
+                    ),
+                );
+                format!("if `{ty}` implemented `Clone`, you could clone the value")
+            } else {
+                format!("if all bounds were met, you could clone the value")
+            };
+            span.push_span_label(expr.span, "you could clone this value");
+            err.span_note(span, msg);
+            if derive_clone {
+                err.help("consider manually implementing `Clone` to avoid undesired bounds");
+            }
         } else if let ty::Param(param) = ty.kind()
             && let Some(_clone_trait_def) = self.infcx.tcx.lang_items().clone_trait()
             && let generics = self.infcx.tcx.generics_of(self.mir_def_id())
@@ -1471,7 +1509,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
         } else {
             "consider cloning the value if the performance cost is acceptable"
         };
-        err.multipart_suggestion_verbose(msg, sugg, Applicability::MachineApplicable);
+        err.multipart_suggestion(msg, sugg, Applicability::MachineApplicable);
         true
     }
 
@@ -2721,7 +2759,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
                 .chain(finder.closure_call_changes)
                 .collect();
 
-            err.multipart_suggestion_verbose(
+            err.multipart_suggestion(
                 "try explicitly passing `&Self` into the closure as an argument",
                 sugg,
                 Applicability::MachineApplicable,
@@ -3309,7 +3347,7 @@ impl<'infcx, 'tcx> MirBorrowckCtxt<'_, 'infcx, 'tcx> {
 
                             let addition =
                                 format!("let {}binding = {};\n{}", mutability, s, " ".repeat(p));
-                            err.multipart_suggestion_verbose(
+                            err.multipart_suggestion(
                                 msg,
                                 vec![
                                     (stmt.span.shrink_to_lo(), addition),

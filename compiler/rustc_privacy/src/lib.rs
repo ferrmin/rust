@@ -21,7 +21,6 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::intern::Interned;
 use rustc_errors::{MultiSpan, listify};
 use rustc_hir as hir;
-use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId, LocalModDefId};
 use rustc_hir::intravisit::{self, InferKind, Visitor};
@@ -508,7 +507,7 @@ impl<'tcx> EmbargoVisitor<'tcx> {
         let hir_id = self.tcx.local_def_id_to_hir_id(local_def_id);
         let attrs = self.tcx.hir_attrs(hir_id);
 
-        if find_attr!(attrs, AttributeKind::RustcMacroTransparency(x) => *x)
+        if find_attr!(attrs, RustcMacroTransparency(x) => *x)
             .unwrap_or(Transparency::fallback(md.macro_rules))
             != Transparency::Opaque
         {
@@ -876,7 +875,7 @@ pub struct TestReachabilityVisitor<'a, 'tcx> {
 
 impl<'a, 'tcx> TestReachabilityVisitor<'a, 'tcx> {
     fn effective_visibility_diagnostic(&self, def_id: LocalDefId) {
-        if self.tcx.has_attr(def_id, sym::rustc_effective_visibility) {
+        if find_attr!(self.tcx, def_id, RustcEffectiveVisibility) {
             let mut error_msg = String::new();
             let span = self.tcx.def_span(def_id.to_def_id());
             if let Some(effective_vis) = self.effective_visibilities.effective_vis(def_id) {
@@ -1157,14 +1156,14 @@ impl<'tcx> TypePrivacyVisitor<'tcx> {
         let typeck_results = self
             .maybe_typeck_results
             .unwrap_or_else(|| span_bug!(span, "`hir::Expr` or `hir::Pat` outside of a body"));
-        let result: ControlFlow<()> = try {
+        try {
             self.visit(typeck_results.node_type(id))?;
             self.visit(typeck_results.node_args(id))?;
             if let Some(adjustments) = typeck_results.adjustments().get(id) {
                 adjustments.iter().try_for_each(|adjustment| self.visit(adjustment.target))?;
             }
-        };
-        result.is_break()
+        }
+        .is_break()
     }
 
     fn check_def_id(&self, def_id: DefId, kind: &str, descr: &dyn fmt::Display) -> bool {

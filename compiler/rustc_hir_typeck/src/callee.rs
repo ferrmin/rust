@@ -2,10 +2,10 @@ use std::iter;
 
 use rustc_abi::{CanonAbi, ExternAbi};
 use rustc_ast::util::parser::ExprPrecedence;
-use rustc_errors::{Applicability, Diag, ErrorGuaranteed, StashKey, inline_fluent};
+use rustc_errors::{Applicability, Diag, ErrorGuaranteed, StashKey, msg};
 use rustc_hir::def::{self, CtorKind, Namespace, Res};
 use rustc_hir::def_id::DefId;
-use rustc_hir::{self as hir, HirId, LangItem};
+use rustc_hir::{self as hir, HirId, LangItem, find_attr};
 use rustc_hir_analysis::autoderef::Autoderef;
 use rustc_infer::infer::BoundRegionConversionTime;
 use rustc_infer::traits::{Obligation, ObligationCause, ObligationCauseCode};
@@ -525,9 +525,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 // Unit testing: function items annotated with
                 // `#[rustc_evaluate_where_clauses]` trigger special output
                 // to let us test the trait evaluation system.
-                if self.has_rustc_attrs
-                    && self.tcx.has_attr(def_id, sym::rustc_evaluate_where_clauses)
-                {
+                if self.has_rustc_attrs && find_attr!(self.tcx, def_id, RustcEvaluateWhereClauses) {
                     let predicates = self.tcx.predicates_of(def_id);
                     let predicates = predicates.instantiate(self.tcx, args);
                     for (predicate, predicate_span) in predicates {
@@ -832,12 +830,12 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 (Some((_, kind, path)), _) => {
                     err.arg("kind", kind);
                     err.arg("path", path);
-                    Some(inline_fluent!("{$kind} `{$path}` defined here"))
+                    Some(msg!("{$kind} `{$path}` defined here"))
                 }
                 (_, Some(hir::QPath::Resolved(_, path))) => {
                     self.tcx.sess.source_map().span_to_snippet(path.span).ok().map(|p| {
                         err.arg("func", p);
-                        inline_fluent!("`{$func}` defined here returns `{$ty}`")
+                        msg!("`{$func}` defined here returns `{$ty}`")
                     })
                 }
                 _ => {
@@ -846,15 +844,15 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // type definitions themselves, but rather variables *of* that type.
                         Res::Local(hir_id) => {
                             err.arg("local_name", self.tcx.hir_name(hir_id));
-                            Some(inline_fluent!("`{$local_name}` has type `{$ty}`"))
+                            Some(msg!("`{$local_name}` has type `{$ty}`"))
                         }
                         Res::Def(kind, def_id) if kind.ns() == Some(Namespace::ValueNS) => {
                             err.arg("path", self.tcx.def_path_str(def_id));
-                            Some(inline_fluent!("`{$path}` defined here"))
+                            Some(msg!("`{$path}` defined here"))
                         }
                         _ => {
                             err.arg("path", callee_ty);
-                            Some(inline_fluent!("`{$path}` defined here"))
+                            Some(msg!("`{$path}` defined here"))
                         }
                     }
                 }
@@ -901,16 +899,8 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         callee_did: DefId,
         callee_args: GenericArgsRef<'tcx>,
     ) {
-        // FIXME(const_trait_impl): We should be enforcing these effects unconditionally.
-        // This can be done as soon as we convert the standard library back to
-        // using const traits, since if we were to enforce these conditions now,
-        // we'd fail on basically every builtin trait call (i.e. `1 + 2`).
-        if !self.tcx.features().const_trait_impl() {
-            return;
-        }
-
         // If we have `rustc_do_not_const_check`, do not check `[const]` bounds.
-        if self.has_rustc_attrs && self.tcx.has_attr(self.body_id, sym::rustc_do_not_const_check) {
+        if self.has_rustc_attrs && find_attr!(self.tcx, self.body_id, RustcDoNotConstCheck) {
             return;
         }
 

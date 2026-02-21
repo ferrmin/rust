@@ -1,6 +1,7 @@
 use rustc_hir::attrs::InlineAttr;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::LocalDefId;
+use rustc_hir::find_attr;
 use rustc_middle::bug;
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::*;
@@ -36,6 +37,7 @@ fn cross_crate_inlinable(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     }
 
     // FIXME(autodiff): replace this as per discussion in https://github.com/rust-lang/rust/pull/149033#discussion_r2535465880
+    #[allow(deprecated)]
     if tcx.has_attr(def_id, sym::autodiff_forward)
         || tcx.has_attr(def_id, sym::autodiff_reverse)
         || tcx.has_attr(def_id, sym::rustc_autodiff)
@@ -43,7 +45,7 @@ fn cross_crate_inlinable(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
         return true;
     }
 
-    if tcx.has_attr(def_id, sym::rustc_intrinsic) {
+    if find_attr!(tcx, def_id, RustcIntrinsic) {
         // Intrinsic fallback bodies are always cross-crate inlineable.
         // To ensure that the MIR inliner doesn't cluelessly try to inline fallback
         // bodies even when the backend would implement something better, we stop
@@ -157,7 +159,7 @@ impl<'tcx> Visitor<'tcx> for CostChecker<'_, 'tcx> {
                 // But intrinsics don't have a body that gets assigned to a CGU, so they are
                 // ignored.
                 if let Some((fn_def_id, _)) = func.const_fn_def()
-                    && self.tcx.has_attr(fn_def_id, sym::rustc_intrinsic)
+                    && find_attr!(tcx, fn_def_id, RustcIntrinsic)
                 {
                     return;
                 }

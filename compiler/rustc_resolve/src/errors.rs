@@ -1,7 +1,7 @@
 use rustc_errors::codes::*;
 use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, DiagMessage, Diagnostic, ElidedLifetimeInPathSubdiag,
-    EmissionGuarantee, IntoDiagArg, Level, LintDiagnostic, MultiSpan, Subdiagnostic, inline_fluent,
+    EmissionGuarantee, IntoDiagArg, Level, LintDiagnostic, MultiSpan, Subdiagnostic, msg,
 };
 use rustc_macros::{Diagnostic, LintDiagnostic, Subdiagnostic};
 use rustc_span::source_map::Spanned;
@@ -249,22 +249,6 @@ pub(crate) struct UnreachableLabelWithSimilarNameExists {
 }
 
 #[derive(Diagnostic)]
-#[diag("`self` import can only appear once in an import list", code = E0430)]
-pub(crate) struct SelfImportCanOnlyAppearOnceInTheList {
-    #[primary_span]
-    #[label("can only appear once in an import list")]
-    pub(crate) span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag("`self` import can only appear in an import list with a non-empty prefix", code = E0431)]
-pub(crate) struct SelfImportOnlyInImportListWithNonEmptyPrefix {
-    #[primary_span]
-    #[label("can only appear in an import list with a non-empty prefix")]
-    pub(crate) span: Span,
-}
-
-#[derive(Diagnostic)]
 #[diag("can't capture dynamic environment in a fn item", code = E0434)]
 #[help("use the `|| {\"{\"} ... {\"}\"}` closure form instead")]
 pub(crate) struct CannotCaptureDynamicEnvironmentInFnItem {
@@ -429,13 +413,9 @@ pub(crate) struct ParamInNonTrivialAnonConst {
     pub(crate) name: Symbol,
     #[subdiagnostic]
     pub(crate) param_kind: ParamKindInNonTrivialAnonConst,
-    #[subdiagnostic]
-    pub(crate) help: Option<ParamInNonTrivialAnonConstHelp>,
+    #[help("add `#![feature(generic_const_exprs)]` to allow generic const expressions")]
+    pub(crate) help: bool,
 }
-
-#[derive(Subdiagnostic)]
-#[help("add `#![feature(generic_const_exprs)]` to allow generic const expressions")]
-pub(crate) struct ParamInNonTrivialAnonConstHelp;
 
 #[derive(Debug)]
 #[derive(Subdiagnostic)]
@@ -640,13 +620,6 @@ pub(crate) struct ProcMacroDeriveResolutionFallback {
 pub(crate) struct MacroExpandedMacroExportsAccessedByAbsolutePaths {
     #[note("the macro is defined here")]
     pub definition: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag("`$crate` may not be imported")]
-pub(crate) struct CrateImported {
-    #[primary_span]
-    pub(crate) span: Span,
 }
 
 #[derive(Diagnostic)]
@@ -977,11 +950,25 @@ pub(crate) struct ArgumentsMacroUseNotAllowed {
     pub(crate) span: Span,
 }
 
+#[derive(Subdiagnostic)]
+#[multipart_suggestion(
+    "try renaming it with a name",
+    applicability = "maybe-incorrect",
+    style = "verbose"
+)]
+pub(crate) struct UnnamedImportSugg {
+    #[suggestion_part(code = "{ident} as name")]
+    pub(crate) span: Span,
+    pub(crate) ident: Ident,
+}
+
 #[derive(Diagnostic)]
-#[diag("crate root imports need to be explicitly named: `use crate as name;`")]
-pub(crate) struct UnnamedCrateRootImport {
+#[diag("imports need to be explicitly named")]
+pub(crate) struct UnnamedImport {
     #[primary_span]
     pub(crate) span: Span,
+    #[subdiagnostic]
+    pub(crate) sugg: Option<UnnamedImportSugg>,
 }
 
 #[derive(Diagnostic)]
@@ -1375,16 +1362,16 @@ impl Subdiagnostic for FoundItemConfigureOut {
                 let key = "feature".into();
                 let value = feature.into_diag_arg(&mut None);
                 let msg = diag.dcx.eagerly_translate_to_string(
-                    inline_fluent!("the item is gated behind the `{$feature}` feature"),
+                    msg!("the item is gated behind the `{$feature}` feature"),
                     [(&key, &value)].into_iter(),
                 );
                 multispan.push_span_label(span, msg);
             }
             ItemWas::CfgOut { span } => {
-                multispan.push_span_label(span, inline_fluent!("the item is gated here"));
+                multispan.push_span_label(span, msg!("the item is gated here"));
             }
         }
-        diag.span_note(multispan, inline_fluent!("found an item that was configured out"));
+        diag.span_note(multispan, msg!("found an item that was configured out"));
     }
 }
 

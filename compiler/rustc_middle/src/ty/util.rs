@@ -4,17 +4,15 @@ use std::{fmt, iter};
 
 use rustc_abi::{Float, Integer, IntegerType, Size};
 use rustc_apfloat::Float as _;
-use rustc_ast::attr::AttributeExt;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_errors::ErrorGuaranteed;
 use rustc_hashes::Hash128;
-use rustc_hir as hir;
-use rustc_hir::attrs::AttributeKind;
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
 use rustc_hir::limit::Limit;
+use rustc_hir::{self as hir, find_attr};
 use rustc_index::bit_set::GrowableBitSet;
 use rustc_macros::{HashStable, TyDecodable, TyEncodable, extension};
 use rustc_span::sym;
@@ -1189,14 +1187,23 @@ impl<'tcx> Ty<'tcx> {
         }
     }
 
+    /// Checks whether values of this type `T` implement the `UnsafeUnpin` trait.
+    pub fn is_unsafe_unpin(self, tcx: TyCtxt<'tcx>, typing_env: ty::TypingEnv<'tcx>) -> bool {
+        self.is_trivially_unpin() || tcx.is_unsafe_unpin_raw(typing_env.as_query_input(self))
+    }
+
     /// Checks whether values of this type `T` implement the `Unpin` trait.
+    ///
+    /// Note that this is a safe trait, so it cannot be very semantically meaningful.
+    /// However, as a hack to mitigate <https://github.com/rust-lang/rust/issues/63818> until a
+    /// proper solution is implemented, we do give special semantics to the `Unpin` trait.
     pub fn is_unpin(self, tcx: TyCtxt<'tcx>, typing_env: ty::TypingEnv<'tcx>) -> bool {
         self.is_trivially_unpin() || tcx.is_unpin_raw(typing_env.as_query_input(self))
     }
 
-    /// Fast path helper for testing if a type is `Unpin`.
+    /// Fast path helper for testing if a type is `Unpin` *and* `UnsafeUnpin`.
     ///
-    /// Returning true means the type is known to be `Unpin`. Returning
+    /// Returning true means the type is known to be `Unpin` and `UnsafeUnpin`. Returning
     /// `false` means nothing -- could be `Unpin`, might not be.
     fn is_trivially_unpin(self) -> bool {
         match self.kind() {
@@ -1663,14 +1670,12 @@ pub fn reveal_opaque_types_in_bounds<'tcx>(
 
 /// Determines whether an item is directly annotated with `doc(hidden)`.
 fn is_doc_hidden(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
-    let attrs = tcx.hir_attrs(tcx.local_def_id_to_hir_id(def_id));
-    attrs.iter().any(|attr| attr.is_doc_hidden())
+    find_attr!(tcx, def_id, Doc(doc) if doc.hidden.is_some())
 }
 
 /// Determines whether an item is annotated with `doc(notable_trait)`.
 pub fn is_doc_notable_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    let attrs = tcx.get_all_attrs(def_id);
-    attrs.iter().any(|attr| matches!(attr, hir::Attribute::Parsed(AttributeKind::Doc(doc)) if doc.notable_trait.is_some()))
+    find_attr!(tcx, def_id, Doc(doc) if doc.notable_trait.is_some())
 }
 
 /// Determines whether an item is an intrinsic (which may be via Abi or via the `rustc_intrinsic` attribute).
@@ -1679,7 +1684,7 @@ pub fn is_doc_notable_trait(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 /// the compiler to make some assumptions about its shape; if the user doesn't use a feature gate, they may
 /// cause an ICE that we otherwise may want to prevent.
 pub fn intrinsic_raw(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::IntrinsicDef> {
-    if tcx.features().intrinsics() && tcx.has_attr(def_id, sym::rustc_intrinsic) {
+    if tcx.features().intrinsics() && find_attr!(tcx, def_id, RustcIntrinsic) {
         let must_be_overridden = match tcx.hir_node_by_def_id(def_id) {
             hir::Node::Item(hir::Item { kind: hir::ItemKind::Fn { has_body, .. }, .. }) => {
                 !has_body
@@ -1689,7 +1694,7 @@ pub fn intrinsic_raw(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Option<ty::Intrinsi
         Some(ty::IntrinsicDef {
             name: tcx.item_name(def_id),
             must_be_overridden,
-            const_stable: tcx.has_attr(def_id, sym::rustc_intrinsic_const_stable_indirect),
+            const_stable: find_attr!(tcx, def_id, RustcIntrinsicConstStableIndirect),
         })
     } else {
         None

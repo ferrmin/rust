@@ -3,12 +3,12 @@ use clippy_utils::diagnostics::{span_lint_and_sugg, span_lint_and_then};
 use clippy_utils::msrvs::{self, Msrv};
 use clippy_utils::res::{MaybeDef, MaybeTypeckRes};
 use clippy_utils::sugg::Sugg;
+use clippy_utils::sym;
 use rustc_errors::Applicability;
 use rustc_hir::{BinOpKind, Expr, ExprKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::ty::Ty;
 use rustc_session::impl_lint_pass;
-use rustc_span::sym;
 
 declare_clippy_lint! {
     /// ### What it does
@@ -85,9 +85,7 @@ impl LateLintPass<'_> for UncheckedTimeSubtraction {
     fn check_expr(&mut self, cx: &LateContext<'_>, expr: &'_ Expr<'_>) {
         let (lhs, rhs) = match expr.kind {
             ExprKind::Binary(op, lhs, rhs) if matches!(op.node, BinOpKind::Sub,) => (lhs, rhs),
-            ExprKind::MethodCall(_, lhs, [rhs], _) if cx.ty_based_def(expr).is_diag_item(cx, sym::sub) => {
-                (lhs, rhs)
-            },
+            ExprKind::MethodCall(_, lhs, [rhs], _) if cx.ty_based_def(expr).is_diag_item(cx, sym::sub) => (lhs, rhs),
             _ => return,
         };
         let typeck = cx.typeck_results();
