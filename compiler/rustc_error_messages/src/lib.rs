@@ -13,6 +13,7 @@ pub use unic_langid::{LanguageIdentifier, langid};
 
 mod diagnostic_impls;
 pub use diagnostic_impls::DiagArgFromDisplay;
+use rustc_data_structures::fx::FxIndexMap;
 
 pub fn register_functions<R, M>(bundle: &mut fluent_bundle::bundle::FluentBundle<R, M>) {
     bundle
@@ -109,8 +110,16 @@ impl MultiSpan {
         MultiSpan { primary_spans: vec, span_labels: vec![] }
     }
 
+    pub fn push_primary_span(&mut self, primary_span: Span) {
+        self.primary_spans.push(primary_span);
+    }
+
     pub fn push_span_label(&mut self, span: Span, label: impl Into<DiagMessage>) {
         self.span_labels.push((span, label.into()));
+    }
+
+    pub fn push_span_diag(&mut self, span: Span, diag: DiagMessage) {
+        self.span_labels.push((span, diag));
     }
 
     /// Selects the first primary span (if any).
@@ -177,6 +186,11 @@ impl MultiSpan {
         }
 
         span_labels
+    }
+
+    /// Returns the span labels as contained by `MultiSpan`.
+    pub fn span_labels_raw(&self) -> &[(Span, DiagMessage)] {
+        &self.span_labels
     }
 
     /// Returns `true` if any of the span labels is displayable.
@@ -296,6 +310,10 @@ pub enum DiagArgValue {
     Number(i32),
     StrListSepByAnd(Vec<Cow<'static, str>>),
 }
+
+/// A mapping from diagnostic argument names to their values.
+/// This contains all the arguments necessary to format a diagnostic message.
+pub type DiagArgMap = FxIndexMap<DiagArgName, DiagArgValue>;
 
 /// Converts a value of a type into a `DiagArg` (typically a field of an `Diag` struct).
 /// Implemented as a custom trait rather than `From` so that it is implemented on the type being

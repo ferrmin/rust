@@ -29,7 +29,7 @@ use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{
     self, DynSend, DynSync, FreezeReadGuard, Lock, RwLock, WorkerLocal,
 };
-use rustc_errors::{Applicability, Diag, DiagCtxtHandle, LintDiagnostic, MultiSpan};
+use rustc_errors::{Applicability, Diag, DiagCtxtHandle, Diagnostic, MultiSpan};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId};
 use rustc_hir::definitions::{DefPathData, Definitions, DisambiguatorState};
@@ -55,7 +55,7 @@ use crate::dep_graph::dep_node::make_metadata;
 use crate::dep_graph::{DepGraph, DepKindVTable, DepNodeIndex};
 use crate::ich::StableHashingContext;
 use crate::infer::canonical::{CanonicalParamEnvCache, CanonicalVarKind};
-use crate::lint::lint_level;
+use crate::lint::{diag_lint_level, lint_level};
 use crate::metadata::ModChild;
 use crate::middle::codegen_fn_attrs::{CodegenFnAttrs, TargetFeature};
 use crate::middle::resolve_bound_vars;
@@ -914,8 +914,8 @@ impl<'tcx> TyCtxt<'tcx> {
         } else if matches!(
             def_kind,
             DefKind::AnonConst
-                | DefKind::AssocConst
-                | DefKind::Const
+                | DefKind::AssocConst { .. }
+                | DefKind::Const { .. }
                 | DefKind::InlineConst
                 | DefKind::GlobalAsm
         ) {
@@ -1114,13 +1114,13 @@ impl<'tcx> TyCtxt<'tcx> {
     /// Check if the given `def_id` is a `type const` (mgca)
     pub fn is_type_const<I: Copy + IntoQueryParam<DefId>>(self, def_id: I) -> bool {
         // No need to call the query directly in this case always false.
-        if !(matches!(
-            self.def_kind(def_id.into_query_param()),
-            DefKind::Const | DefKind::AssocConst
-        )) {
-            return false;
+        let def_kind = self.def_kind(def_id.into_query_param());
+        match def_kind {
+            DefKind::Const { is_type_const } | DefKind::AssocConst { is_type_const } => {
+                is_type_const
+            }
+            _ => false,
         }
-        self.is_rhs_type_const(def_id)
     }
 
     /// Returns the movability of the coroutine of `def_id`, or panics
@@ -1331,8 +1331,8 @@ impl<'tcx> TyCtxt<'tcx> {
         caller: DefId,
     ) -> Option<ty::Binder<'tcx, ty::FnSig<'tcx>>> {
         let fun_features = &self.codegen_fn_attrs(fun_def).target_features;
-        let callee_features = &self.codegen_fn_attrs(caller).target_features;
-        if self.is_target_feature_call_safe(&fun_features, &callee_features) {
+        let caller_features = &self.body_codegen_attrs(caller).target_features;
+        if self.is_target_feature_call_safe(&fun_features, &caller_features) {
             return Some(fun_sig.map_bound(|sig| ty::FnSig { safety: hir::Safety::Safe, ..sig }));
         }
         None
@@ -2086,7 +2086,7 @@ impl<'tcx> TyCtxt<'tcx> {
 
     /// Given a `ty`, return whether it's an `impl Future<...>`.
     pub fn ty_is_opaque_future(self, ty: Ty<'_>) -> bool {
-        let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = ty.kind() else { return false };
+        let ty::Alias(ty::Opaque, ty::AliasTy { def_id, .. }) = *ty.kind() else { return false };
         let future_trait = self.require_lang_item(LangItem::Future, DUMMY_SP);
 
         self.explicit_item_self_bounds(def_id).skip_binder().iter().any(|&(predicate, _)| {
@@ -2151,9 +2151,9 @@ impl<'tcx> TyCtxt<'tcx> {
         // ATPITs) do not.
         let is_inherent_assoc_ty = matches!(self.def_kind(def_id), DefKind::AssocTy)
             && matches!(self.def_kind(self.parent(def_id)), DefKind::Impl { of_trait: false });
-        let is_inherent_assoc_type_const = matches!(self.def_kind(def_id), DefKind::AssocConst)
-            && matches!(self.def_kind(self.parent(def_id)), DefKind::Impl { of_trait: false })
-            && self.is_type_const(def_id);
+        let is_inherent_assoc_type_const =
+            matches!(self.def_kind(def_id), DefKind::AssocConst { is_type_const: true })
+                && matches!(self.def_kind(self.parent(def_id)), DefKind::Impl { of_trait: false });
         let own_args = if !nested && (is_inherent_assoc_ty || is_inherent_assoc_type_const) {
             if generics.own_params.len() + 1 != args.len() {
                 return false;
@@ -2198,9 +2198,12 @@ impl<'tcx> TyCtxt<'tcx> {
         if cfg!(debug_assertions) && !self.check_args_compatible(def_id, args) {
             let is_inherent_assoc_ty = matches!(self.def_kind(def_id), DefKind::AssocTy)
                 && matches!(self.def_kind(self.parent(def_id)), DefKind::Impl { of_trait: false });
-            let is_inherent_assoc_type_const = matches!(self.def_kind(def_id), DefKind::AssocConst)
-                && matches!(self.def_kind(self.parent(def_id)), DefKind::Impl { of_trait: false })
-                && self.is_type_const(def_id);
+            let is_inherent_assoc_type_const =
+                matches!(self.def_kind(def_id), DefKind::AssocConst { is_type_const: true })
+                    && matches!(
+                        self.def_kind(self.parent(def_id)),
+                        DefKind::Impl { of_trait: false }
+                    );
             if is_inherent_assoc_ty || is_inherent_assoc_type_const {
                 bug!(
                     "args not compatible with generics for {}: args={:#?}, generics={:#?}",
@@ -2495,20 +2498,18 @@ impl<'tcx> TyCtxt<'tcx> {
         T::collect_and_apply(iter, |xs| self.mk_outlives(xs))
     }
 
-    /// Emit a lint at `span` from a lint struct (some type that implements `LintDiagnostic`,
-    /// typically generated by `#[derive(LintDiagnostic)]`).
+    /// Emit a lint at `span` from a lint struct (some type that implements `Diagnostic`,
+    /// typically generated by `#[derive(Diagnostic)]`).
     #[track_caller]
     pub fn emit_node_span_lint(
         self,
         lint: &'static Lint,
         hir_id: HirId,
         span: impl Into<MultiSpan>,
-        decorator: impl for<'a> LintDiagnostic<'a, ()>,
+        decorator: impl for<'a> Diagnostic<'a, ()>,
     ) {
         let level = self.lint_level_at_node(lint, hir_id);
-        lint_level(self.sess, lint, level, Some(span.into()), |lint| {
-            decorator.decorate_lint(lint);
-        })
+        diag_lint_level(self.sess, lint, level, Some(span.into()), decorator)
     }
 
     /// Emit a lint at the appropriate level for a hir node, with an associated span.
@@ -2556,18 +2557,17 @@ impl<'tcx> TyCtxt<'tcx> {
         }
     }
 
-    /// Emit a lint from a lint struct (some type that implements `LintDiagnostic`, typically
-    /// generated by `#[derive(LintDiagnostic)]`).
+    /// Emit a lint from a lint struct (some type that implements `Diagnostic`, typically generated
+    /// by `#[derive(Diagnostic)]`).
     #[track_caller]
     pub fn emit_node_lint(
         self,
         lint: &'static Lint,
         id: HirId,
-        decorator: impl for<'a> LintDiagnostic<'a, ()>,
+        decorator: impl for<'a> Diagnostic<'a, ()>,
     ) {
-        self.node_lint(lint, id, |lint| {
-            decorator.decorate_lint(lint);
-        })
+        let level = self.lint_level_at_node(lint, id);
+        diag_lint_level(self.sess, lint, level, None, decorator);
     }
 
     /// Emit a lint at the appropriate level for a hir node.

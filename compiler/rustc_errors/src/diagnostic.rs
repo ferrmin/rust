@@ -7,8 +7,7 @@ use std::panic;
 use std::path::PathBuf;
 use std::thread::panicking;
 
-use rustc_data_structures::fx::FxIndexMap;
-use rustc_error_messages::{DiagArgName, DiagArgValue, IntoDiagArg};
+use rustc_error_messages::{DiagArgMap, DiagArgName, DiagArgValue, IntoDiagArg};
 use rustc_lint_defs::{Applicability, LintExpectationId};
 use rustc_macros::{Decodable, Encodable};
 use rustc_span::source_map::Spanned;
@@ -19,8 +18,6 @@ use crate::{
     CodeSuggestion, DiagCtxtHandle, DiagMessage, ErrCode, ErrorGuaranteed, ExplicitBug, Level,
     MultiSpan, StashKey, Style, Substitution, SubstitutionPart, SuggestionStyle, Suggestions,
 };
-
-pub type DiagArgMap = FxIndexMap<DiagArgName, DiagArgValue>;
 
 /// Trait for types that `Diag::emit` can return as a "guarantee" (or "proof")
 /// token that the emission happened.
@@ -1322,6 +1319,13 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
     pub fn cancel(mut self) {
         self.diag = None;
         drop(self);
+    }
+
+    /// Cancels this diagnostic and returns its first message, if it exists.
+    pub fn cancel_into_message(self) -> Option<String> {
+        let s = self.diag.as_ref()?.messages.get(0)?.0.as_str().map(ToString::to_string);
+        self.cancel();
+        s
     }
 
     /// See `DiagCtxt::stash_diagnostic` for details.

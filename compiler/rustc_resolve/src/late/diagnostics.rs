@@ -414,7 +414,10 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                             .is_ok_and(|snippet| snippet.ends_with(')'))
                     }
                     Res::Def(
-                        DefKind::Ctor(..) | DefKind::AssocFn | DefKind::Const | DefKind::AssocConst,
+                        DefKind::Ctor(..)
+                        | DefKind::AssocFn
+                        | DefKind::Const { .. }
+                        | DefKind::AssocConst { .. },
                         _,
                     )
                     | Res::SelfCtor(_)
@@ -2359,7 +2362,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                                 .tcx
                                 .associated_item_def_ids(def_id)
                                 .iter()
-                                .map(|field_id| self.r.tcx.visibility(field_id))
+                                .map(|&field_id| self.r.tcx.visibility(field_id))
                                 .collect();
                             (ctor_res, ctor_vis, field_visibilities)
                         })
@@ -2594,7 +2597,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
             .tcx
             .inherent_impls(def_id)
             .iter()
-            .flat_map(|i| self.r.tcx.associated_items(i).in_definition_order())
+            .flat_map(|&i| self.r.tcx.associated_items(i).in_definition_order())
             // Only assoc fn with no receivers.
             .filter(|item| item.is_fn() && !item.is_method())
             .filter_map(|item| {
@@ -2702,7 +2705,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                     .tcx
                     .associated_item_def_ids(def_id)
                     .iter()
-                    .map(|field_id| self.r.tcx.visibility(field_id))
+                    .map(|&field_id| self.r.tcx.visibility(field_id))
                     .collect(),
             ),
         };
@@ -2732,7 +2735,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
             .iter()
             .filter_map(|(key, res)| res.borrow().best_decl().map(|binding| (key, binding.res())))
             .filter(|(_, res)| match (kind, res) {
-                (AssocItemKind::Const(..), Res::Def(DefKind::AssocConst, _)) => true,
+                (AssocItemKind::Const(..), Res::Def(DefKind::AssocConst { .. }, _)) => true,
                 (AssocItemKind::Fn(_), Res::Def(DefKind::AssocFn, _)) => true,
                 (AssocItemKind::Type(..), Res::Def(DefKind::AssocTy, _)) => true,
                 (AssocItemKind::Delegation(_), Res::Def(DefKind::AssocFn, _)) => true,
@@ -2840,7 +2843,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                             return Some(AssocSuggestion::AssocFn { called });
                         }
                     }
-                    Res::Def(DefKind::AssocConst, _) => {
+                    Res::Def(DefKind::AssocConst { .. }, _) => {
                         return Some(AssocSuggestion::AssocConst);
                     }
                     Res::Def(DefKind::AssocTy, _) => {
@@ -3726,6 +3729,8 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                         name: lifetime_ref.ident.name,
                         param_kind: errors::ParamKindInNonTrivialAnonConst::Lifetime,
                         help: self.r.tcx.sess.is_nightly_build(),
+                        is_ogca: self.r.tcx.features().opaque_generic_const_args(),
+                        help_ogca: self.r.tcx.features().opaque_generic_const_args(),
                     })
                     .emit()
             }

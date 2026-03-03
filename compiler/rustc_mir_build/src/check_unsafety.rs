@@ -115,12 +115,12 @@ impl<'tcx> UnsafetyVisitor<'_, 'tcx> {
                     CallToDeprecatedSafeFnRequiresUnsafe {
                         span,
                         function: with_no_trimmed_paths!(self.tcx.def_path_str(id)),
-                        guarantee,
                         sub: CallToDeprecatedSafeFnRequiresUnsafeSub {
                             start_of_line_suggestion: suggestion,
                             start_of_line: sm.span_extend_to_line(span).shrink_to_lo(),
                             left: span.shrink_to_lo(),
                             right: span.shrink_to_hi(),
+                            guarantee,
                         },
                     },
                 );
@@ -471,7 +471,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafetyVisitor<'a, 'tcx> {
             ExprKind::Call { fun, ty: _, args: _, from_hir_call: _, fn_span: _ } => {
                 let fn_ty = self.thir[fun].ty;
                 let sig = fn_ty.fn_sig(self.tcx);
-                let (callee_features, safe_target_features): (&[_], _) = match fn_ty.kind() {
+                let (callee_features, safe_target_features): (&[_], _) = match *fn_ty.kind() {
                     ty::FnDef(func_id, ..) => {
                         let cg_attrs = self.tcx.codegen_fn_attrs(func_id);
                         (&cg_attrs.target_features, cg_attrs.safe_target_features)

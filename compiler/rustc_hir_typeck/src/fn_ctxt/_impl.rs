@@ -988,7 +988,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             Res::Def(DefKind::Ctor(CtorOf::Variant, _), _) => {
                 err_extend = GenericsArgsErrExtend::DefVariant(segments);
             }
-            Res::Def(DefKind::AssocFn | DefKind::AssocConst, def_id) => {
+            Res::Def(DefKind::AssocFn | DefKind::AssocConst { .. }, def_id) => {
                 let assoc_item = tcx.associated_item(def_id);
                 let container = assoc_item.container;
                 let container_id = assoc_item.container_id(tcx);
@@ -1118,7 +1118,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // error in `validate_res_from_ribs` -- it's just difficult to tell whether the
             // self type has any generic types during rustc_resolve, which is what we use
             // to determine if this is a hard error or warning.
-            if std::iter::successors(Some(self.body_id.to_def_id()), |def_id| {
+            if std::iter::successors(Some(self.body_id.to_def_id()), |&def_id| {
                 self.tcx.generics_of(def_id).parent
             })
             .all(|def_id| def_id != impl_def_id)
@@ -1314,7 +1314,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             )
         });
 
-        let args_for_user_type = if let Res::Def(DefKind::AssocConst, def_id) = res {
+        let args_for_user_type = if let Res::Def(DefKind::AssocConst { .. }, def_id) = res {
             self.transform_args_for_inherent_type_const(def_id, args_raw)
         } else {
             args_raw
@@ -1362,7 +1362,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
 
         debug!("instantiate_value_path: type of {:?} is {:?}", hir_id, ty_instantiated);
 
-        let args = if let Res::Def(DefKind::AssocConst, def_id) = res {
+        let args = if let Res::Def(DefKind::AssocConst { .. }, def_id) = res {
             self.transform_args_for_inherent_type_const(def_id, args)
         } else {
             args

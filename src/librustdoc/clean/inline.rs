@@ -129,7 +129,7 @@ pub(crate) fn try_inline(
                 clean::StaticItem(build_static(cx, did, cx.tcx.is_mutable_static(did)))
             })
         }
-        Res::Def(DefKind::Const, did) => {
+        Res::Def(DefKind::Const { .. }, did) => {
             record_extern_fqn(cx, did, ItemType::Constant);
             cx.with_param_env(did, |cx| {
                 let ct = build_const_item(cx, did);
@@ -191,7 +191,7 @@ pub(crate) fn try_inline_glob(
                 .iter()
                 .filter(|child| !child.reexport_chain.is_empty())
                 .filter_map(|child| child.res.opt_def_id())
-                .filter(|def_id| !cx.tcx.is_doc_hidden(def_id))
+                .filter(|&def_id| !cx.tcx.is_doc_hidden(def_id))
                 .collect();
             let attrs = cx.tcx.hir_attrs(import.hir_id());
             let mut items = build_module_items(
