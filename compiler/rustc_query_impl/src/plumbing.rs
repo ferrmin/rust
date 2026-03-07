@@ -61,161 +61,36 @@ pub(crate) fn next_job_id<'tcx>(tcx: TyCtxt<'tcx>) -> QueryJobId {
 }
 
 #[inline]
-pub(crate) fn current_query_job<'tcx>(tcx: TyCtxt<'tcx>) -> Option<QueryJobId> {
-    tls::with_related_context(tcx, |icx| icx.query)
+pub(crate) fn current_query_job() -> Option<QueryJobId> {
+    tls::with_context(|icx| icx.query)
 }
 
-/// Executes a job by changing the `ImplicitCtxt` to point to the
-/// new query job while it executes.
+/// Executes a job by changing the `ImplicitCtxt` to point to the new query job while it executes.
 #[inline(always)]
-pub(crate) fn start_query<'tcx, R>(
-    tcx: TyCtxt<'tcx>,
-    token: QueryJobId,
+pub(crate) fn start_query<R>(
+    job_id: QueryJobId,
     depth_limit: bool,
     compute: impl FnOnce() -> R,
 ) -> R {
-    // The `TyCtxt` stored in TLS has the same global interner lifetime
-    // as `self`, so we use `with_related_context` to relate the 'tcx lifetimes
-    // when accessing the `ImplicitCtxt`.
-    tls::with_related_context(tcx, move |current_icx| {
-        if depth_limit && !tcx.recursion_limit().value_within_limit(current_icx.query_depth) {
-            depth_limit_error(tcx, token);
+    tls::with_context(move |icx| {
+        if depth_limit && !icx.tcx.recursion_limit().value_within_limit(icx.query_depth) {
+            depth_limit_error(icx.tcx, job_id);
         }
 
         // Update the `ImplicitCtxt` to point to our new query job.
-        let new_icx = ImplicitCtxt {
-            tcx,
-            query: Some(token),
-            query_depth: current_icx.query_depth + depth_limit as usize,
-            task_deps: current_icx.task_deps,
+        let icx = ImplicitCtxt {
+            query: Some(job_id),
+            query_depth: icx.query_depth + if depth_limit { 1 } else { 0 },
+            ..*icx
         };
 
         // Use the `ImplicitCtxt` while we execute the query.
-        tls::enter_context(&new_icx, compute)
+        tls::enter_context(&icx, compute)
     })
 }
 
 pub(super) fn try_mark_green<'tcx>(tcx: TyCtxt<'tcx>, dep_node: &DepNode) -> bool {
     tcx.dep_graph.try_mark_green(tcx, dep_node).is_some()
-}
-
-macro_rules! cycle_error_handling {
-    ([]) => {{
-        rustc_middle::query::CycleErrorHandling::Error
-    }};
-    ([(cycle_fatal) $($rest:tt)*]) => {{
-        rustc_middle::query::CycleErrorHandling::Fatal
-    }};
-    ([(cycle_stash) $($rest:tt)*]) => {{
-        rustc_middle::query::CycleErrorHandling::Stash
-    }};
-    ([(cycle_delay_bug) $($rest:tt)*]) => {{
-        rustc_middle::query::CycleErrorHandling::DelayBug
-    }};
-    ([$other:tt $($modifiers:tt)*]) => {
-        cycle_error_handling!([$($modifiers)*])
-    };
-}
-
-macro_rules! is_anon {
-    ([]) => {{
-        false
-    }};
-    ([(anon) $($rest:tt)*]) => {{
-        true
-    }};
-    ([$other:tt $($modifiers:tt)*]) => {
-        is_anon!([$($modifiers)*])
-    };
-}
-
-macro_rules! is_eval_always {
-    ([]) => {{
-        false
-    }};
-    ([(eval_always) $($rest:tt)*]) => {{
-        true
-    }};
-    ([$other:tt $($modifiers:tt)*]) => {
-        is_eval_always!([$($modifiers)*])
-    };
-}
-
-macro_rules! is_depth_limit {
-    ([]) => {{
-        false
-    }};
-    ([(depth_limit) $($rest:tt)*]) => {{
-        true
-    }};
-    ([$other:tt $($modifiers:tt)*]) => {
-        is_depth_limit!([$($modifiers)*])
-    };
-}
-
-macro_rules! is_feedable {
-    ([]) => {{
-        false
-    }};
-    ([(feedable) $($rest:tt)*]) => {{
-        true
-    }};
-    ([$other:tt $($modifiers:tt)*]) => {
-        is_feedable!([$($modifiers)*])
-    };
-}
-
-/// Expands to `$yes` if the `no_hash` modifier is present, or `$no` otherwise.
-macro_rules! if_no_hash {
-    ([] $yes:tt $no:tt) => { $no };
-    ([(no_hash) $($modifiers:tt)*] $yes:tt $no:tt) => { $yes };
-    ([$other:tt $($modifiers:tt)*] $yes:tt $no:tt) => {
-        if_no_hash!([$($modifiers)*] $yes $no)
-    }
-}
-
-macro_rules! call_provider {
-    ([][$tcx:expr, $name:ident, $key:expr]) => {{
-        ($tcx.query_system.local_providers.$name)($tcx, $key)
-    }};
-    ([(separate_provide_extern) $($rest:tt)*][$tcx:expr, $name:ident, $key:expr]) => {{
-        if let Some(key) = $key.as_local_key() {
-            ($tcx.query_system.local_providers.$name)($tcx, key)
-        } else {
-            ($tcx.query_system.extern_providers.$name)($tcx, $key)
-        }
-    }};
-    ([$other:tt $($modifiers:tt)*][$($args:tt)*]) => {
-        call_provider!([$($modifiers)*][$($args)*])
-    };
-}
-
-/// Expands to one of two token trees, depending on whether the current query
-/// has the `cache_on_disk_if` modifier.
-macro_rules! if_cache_on_disk {
-    ([] $yes:tt $no:tt) => {
-        $no
-    };
-    // The `cache_on_disk_if` modifier generates a synthetic `(cache_on_disk)`,
-    // modifier, for use by this macro and similar macros.
-    ([(cache_on_disk) $($rest:tt)*] $yes:tt $no:tt) => {
-        $yes
-    };
-    ([$other:tt $($modifiers:tt)*] $yes:tt $no:tt) => {
-        if_cache_on_disk!([$($modifiers)*] $yes $no)
-    };
-}
-
-/// Conditionally expands to some token trees, if the current query has the
-/// `cache_on_disk_if` modifier.
-macro_rules! item_if_cache_on_disk {
-    ([] $($item:tt)*) => {};
-    ([(cache_on_disk) $($rest:tt)*] $($item:tt)*) => {
-        $($item)*
-    };
-    ([$other:tt $($modifiers:tt)*] $($item:tt)*) => {
-        item_if_cache_on_disk! { [$($modifiers)*] $($item)* }
-    };
 }
 
 /// The deferred part of a deferred query stack frame.
@@ -286,8 +161,8 @@ pub(crate) fn encode_query_results<'a, 'tcx, C, V>(
     let _timer = tcx.prof.generic_activity_with_arg("encode_query_results_for", query.name);
 
     assert!(all_inactive(&query.state));
-    query.cache.iter(&mut |key, value, dep_node| {
-        if query.will_cache_on_disk_for_key(tcx, key) {
+    query.cache.for_each(&mut |key, value, dep_node| {
+        if (query.will_cache_on_disk_for_key_fn)(tcx, key) {
             let dep_node = SerializedDepNodeIndex::new(dep_node.index());
 
             // Record position of the cache entry.
@@ -308,7 +183,7 @@ pub(crate) fn query_key_hash_verify<'tcx, C: QueryCache>(
 
     let cache = &query.cache;
     let mut map = UnordMap::with_capacity(cache.len());
-    cache.iter(&mut |key, _, _| {
+    cache.for_each(&mut |key, _, _| {
         let node = DepNode::construct(tcx, query.dep_kind, key);
         if let Some(other_key) = map.insert(node, *key) {
             bug!(
@@ -340,7 +215,7 @@ pub(crate) fn promote_from_disk_inner<'tcx, Q: GetQueryVTable<'tcx>>(
             dep_node.key_fingerprint
         )
     });
-    if query.will_cache_on_disk_for_key(tcx, &key) {
+    if (query.will_cache_on_disk_for_key_fn)(tcx, &key) {
         // Call `tcx.$query(key)` for its side-effect of loading the disk-cached
         // value into memory.
         (query.call_query_method_fn)(tcx, key);
@@ -421,8 +296,20 @@ macro_rules! define_queries {
         queries {
             $(
                 $(#[$attr:meta])*
-                [$($modifiers:tt)*]
-                fn $name:ident($K:ty) -> $V:ty,
+                fn $name:ident($K:ty) -> $V:ty
+                {
+                    // Search for (QMODLIST) to find all occurrences of this query modifier list.
+                    anon: $anon:literal,
+                    arena_cache: $arena_cache:literal,
+                    cache_on_disk: $cache_on_disk:literal,
+                    cycle_error_handling: $cycle_error_handling:ident,
+                    depth_limit: $depth_limit:literal,
+                    eval_always: $eval_always:literal,
+                    feedable: $feedable:literal,
+                    no_hash: $no_hash:literal,
+                    return_result_from_ensure_ok: $return_result_from_ensure_ok:literal,
+                    separate_provide_extern: $separate_provide_extern:literal,
+                }
             )*
         }
         // Non-queries are unused here.
@@ -498,7 +385,16 @@ macro_rules! define_queries {
                     let _guard = tracing::span!(tracing::Level::TRACE, stringify!($name), ?key).entered();
 
                     // Call the actual provider function for this query.
-                    let provided_value = call_provider!([$($modifiers)*][tcx, $name, key]);
+
+                    #[cfg($separate_provide_extern)]
+                    let provided_value = if let Some(local_key) = key.as_local_key() {
+                        (tcx.query_system.local_providers.$name)(tcx, local_key)
+                    } else {
+                        (tcx.query_system.extern_providers.$name)(tcx, key)
+                    };
+
+                    #[cfg(not($separate_provide_extern))]
+                    let provided_value = (tcx.query_system.local_providers.$name)(tcx, key);
 
                     rustc_middle::ty::print::with_reduced_queries!({
                         tracing::trace!(?provided_value);
@@ -515,64 +411,67 @@ macro_rules! define_queries {
             {
                 QueryVTable {
                     name: stringify!($name),
-                    anon: is_anon!([$($modifiers)*]),
-                    eval_always: is_eval_always!([$($modifiers)*]),
-                    depth_limit: is_depth_limit!([$($modifiers)*]),
-                    feedable: is_feedable!([$($modifiers)*]),
+                    anon: $anon,
+                    eval_always: $eval_always,
+                    depth_limit: $depth_limit,
+                    feedable: $feedable,
                     dep_kind: dep_graph::DepKind::$name,
-                    cycle_error_handling: cycle_error_handling!([$($modifiers)*]),
+                    cycle_error_handling:
+                        rustc_middle::query::CycleErrorHandling::$cycle_error_handling,
                     state: Default::default(),
                     cache: Default::default(),
-                    will_cache_on_disk_for_key_fn: if_cache_on_disk!([$($modifiers)*] {
-                        Some(::rustc_middle::queries::_cache_on_disk_if_fns::$name)
-                    } {
-                        None
-                    }),
+
                     call_query_method_fn: |tcx, key| {
                         // Call the query method for its side-effect of loading a value
                         // from disk-cache; the caller doesn't need the value.
                         let _ = tcx.$name(key);
                     },
                     invoke_provider_fn: self::invoke_provider_fn::__rust_begin_short_backtrace,
-                    try_load_from_disk_fn: if_cache_on_disk!([$($modifiers)*] {
-                        Some(|tcx, key, prev_index, index| {
-                            // Check the `cache_on_disk_if` condition for this key.
-                            if !::rustc_middle::queries::_cache_on_disk_if_fns::$name(tcx, key) {
-                                return None;
-                            }
 
-                            let value: queries::$name::ProvidedValue<'tcx> =
-                                $crate::plumbing::try_load_from_disk(tcx, prev_index, index)?;
+                    #[cfg($cache_on_disk)]
+                    will_cache_on_disk_for_key_fn:
+                        rustc_middle::queries::_cache_on_disk_if_fns::$name,
+                    #[cfg(not($cache_on_disk))]
+                    will_cache_on_disk_for_key_fn: |_, _| false,
 
-                            // Arena-alloc the value if appropriate, and erase it.
-                            Some(queries::$name::provided_to_erased(tcx, value))
-                        })
-                    } {
-                        None
-                    }),
-                    is_loadable_from_disk_fn: if_cache_on_disk!([$($modifiers)*] {
-                        Some(|tcx, key, index| -> bool {
-                            ::rustc_middle::queries::_cache_on_disk_if_fns::$name(tcx, key) &&
-                                $crate::plumbing::loadable_from_disk(tcx, index)
-                        })
-                    } {
-                        None
-                    }),
+                    #[cfg($cache_on_disk)]
+                    try_load_from_disk_fn: |tcx, key, prev_index, index| {
+                        // Check the `cache_on_disk_if` condition for this key.
+                        if !rustc_middle::queries::_cache_on_disk_if_fns::$name(tcx, key) {
+                            return None;
+                        }
+
+                        let value: queries::$name::ProvidedValue<'tcx> =
+                            $crate::plumbing::try_load_from_disk(tcx, prev_index, index)?;
+
+                        // Arena-alloc the value if appropriate, and erase it.
+                        Some(queries::$name::provided_to_erased(tcx, value))
+                    },
+                    #[cfg(not($cache_on_disk))]
+                    try_load_from_disk_fn: |_tcx, _key, _prev_index, _index| None,
+
+                    #[cfg($cache_on_disk)]
+                    is_loadable_from_disk_fn: |tcx, key, index| -> bool {
+                        rustc_middle::queries::_cache_on_disk_if_fns::$name(tcx, key) &&
+                            $crate::plumbing::loadable_from_disk(tcx, index)
+                    },
+                    #[cfg(not($cache_on_disk))]
+                    is_loadable_from_disk_fn: |_tcx, _key, _index| false,
+
                     value_from_cycle_error: |tcx, cycle, guar| {
                         let result: queries::$name::Value<'tcx> =
                             FromCycleError::from_cycle_error(tcx, cycle, guar);
                         erase::erase_val(result)
                     },
-                    hash_value_fn: if_no_hash!(
-                        [$($modifiers)*]
-                        None
-                        {
-                            Some(|hcx, erased_value: &erase::Erased<queries::$name::Value<'tcx>>| {
-                                let value = erase::restore_val(*erased_value);
-                                rustc_middle::dep_graph::hash_result(hcx, &value)
-                            })
-                        }
-                    ),
+
+                    #[cfg($no_hash)]
+                    hash_value_fn: None,
+                    #[cfg(not($no_hash))]
+                    hash_value_fn: Some(|hcx, erased_value: &erase::Erased<queries::$name::Value<'tcx>>| {
+                        let value = erase::restore_val(*erased_value);
+                        rustc_middle::dep_graph::hash_result(hcx, &value)
+                    }),
+
                     format_value: |value| format!("{:?}", erase::restore_val::<queries::$name::Value<'tcx>>(*value)),
                     description_fn: $crate::queries::_description_fns::$name,
                     execute_query_fn: if incremental {
@@ -670,8 +569,8 @@ macro_rules! define_queries {
             query_result_index: &mut EncodedDepNodeIndex,
         ) {
             $(
-                item_if_cache_on_disk! {
-                    [$($modifiers)*]
+                #[cfg($cache_on_disk)]
+                {
                     $crate::plumbing::encode_query_results(
                         tcx,
                         &tcx.query_system.query_vtables.$name,
