@@ -128,6 +128,17 @@ impl<'a> Diagnostic<'a, ()>
     }
 }
 
+/// Type used to emit diagnostic through a closure instead of implementing the `Diagnostic` trait.
+pub struct DiagDecorator<F: FnOnce(&mut Diag<'_, ()>)>(pub F);
+
+impl<'a, F: FnOnce(&mut Diag<'_, ()>)> Diagnostic<'a, ()> for DiagDecorator<F> {
+    fn into_diag(self, dcx: DiagCtxtHandle<'a>, level: Level) -> Diag<'a, ()> {
+        let mut diag = Diag::new(dcx, level, "");
+        (self.0)(&mut diag);
+        diag
+    }
+}
+
 /// Trait implemented by error types. This should not be implemented manually. Instead, use
 /// `#[derive(Subdiagnostic)]` -- see [rustc_macros::Subdiagnostic].
 #[rustc_diagnostic_item = "Subdiagnostic"]
@@ -923,6 +934,7 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
         self
     } }
 
+    with_fn! { with_span_suggestion_with_style,
     /// [`Diag::span_suggestion()`] but you can set the [`SuggestionStyle`].
     pub fn span_suggestion_with_style(
         &mut self,
@@ -945,7 +957,7 @@ impl<'a, G: EmissionGuarantee> Diag<'a, G> {
             applicability,
         });
         self
-    }
+    } }
 
     with_fn! { with_span_suggestion_verbose,
     /// Always show the suggested change.
