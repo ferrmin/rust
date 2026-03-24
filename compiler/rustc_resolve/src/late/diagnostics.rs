@@ -3381,7 +3381,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
             && def_id.is_local()
             && let Some(local_def_id) = def_id.as_local()
             && let Some(struct_generics) = self.r.struct_generics.get(&local_def_id)
-            && let target_param = &struct_generics.params[idx]
+            && let Some(target_param) = &struct_generics.params.get(idx)
             && let GenericParamKind::Const { ty, .. } = &target_param.kind
             && let TyKind::Path(_, path) = &ty.kind
         {
@@ -3653,7 +3653,8 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                         param.ident.span,
                         lint::BuiltinLintDiag::SingleUseLifetime {
                             param_span: param.ident.span,
-                            use_span: Some((use_span, elidable)),
+                            use_span,
+                            elidable,
                             deletion_span,
                             ident: param.ident,
                         },
@@ -3669,12 +3670,7 @@ impl<'ast, 'ra, 'tcx> LateResolutionVisitor<'_, 'ast, 'ra, 'tcx> {
                             lint::builtin::UNUSED_LIFETIMES,
                             param.id,
                             param.ident.span,
-                            lint::BuiltinLintDiag::SingleUseLifetime {
-                                param_span: param.ident.span,
-                                use_span: None,
-                                deletion_span,
-                                ident: param.ident,
-                            },
+                            errors::UnusedLifetime { deletion_span, ident: param.ident },
                         );
                     }
                 }
