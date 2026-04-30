@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use std::{env, fs, iter};
 
 use rustc_ast::{self as ast, CRATE_NODE_ID};
-use rustc_attr_parsing::{AttributeParser, Early, ShouldEmit};
+use rustc_attr_parsing::{AttributeParser, ShouldEmit};
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo};
 use rustc_data_structures::indexmap::IndexMap;
@@ -1041,7 +1041,7 @@ impl<'a, 'b, 'tcx> Diagnostic<'a, ()> for DiagCallback<'b, 'tcx> {
 pub fn emit_delayed_lints(tcx: TyCtxt<'_>) {
     for owner_id in tcx.hir_crate_items(()).delayed_lint_items() {
         if let Some(delayed_lints) = tcx.opt_ast_lowering_delayed_lints(owner_id) {
-            for lint in delayed_lints {
+            for lint in delayed_lints.steal() {
                 tcx.emit_node_span_lint(
                     lint.lint_id.lint,
                     lint.id,
@@ -1117,7 +1117,7 @@ fn run_required_analyses(tcx: TyCtxt<'_>) {
             let hir_items = tcx.hir_crate_items(());
             for owner_id in hir_items.owners() {
                 if let Some(delayed_lints) = tcx.opt_ast_lowering_delayed_lints(owner_id)
-                    && !delayed_lints.is_empty()
+                    && !delayed_lints.borrow().is_empty()
                 {
                     // Assert that delayed_lint_items also picked up this item to have lints.
                     assert!(hir_items.delayed_lint_items().any(|i| i == owner_id));
@@ -1419,7 +1419,7 @@ pub fn collect_crate_types(
     let mut base = session.opts.crate_types.clone();
     if base.is_empty() {
         if let Some(Attribute::Parsed(AttributeKind::CrateType(crate_type))) =
-            AttributeParser::<Early>::parse_limited_should_emit(
+            AttributeParser::parse_limited_should_emit(
                 session,
                 attrs,
                 &[sym::crate_type],

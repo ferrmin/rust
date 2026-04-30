@@ -16,7 +16,7 @@ use rustc_session::lint::builtin::{
 use rustc_span::{Ident, InnerSpan, Span, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
 
-use crate::context::{AcceptContext, Stage};
+use crate::context::AcceptContext;
 use crate::errors::{
     FormatWarning, IgnoredDiagnosticOption, MalFormedDiagnosticAttributeLint,
     MissingOptionsForDiagnosticAttribute, NonMetaItemDiagnosticAttribute, WrappedParserError,
@@ -112,8 +112,8 @@ impl Mode {
     }
 }
 
-fn merge_directives<S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn merge_directives(
+    cx: &mut AcceptContext<'_, '_>,
     first: &mut Option<(Span, Directive)>,
     later: (Span, Directive),
 ) {
@@ -130,8 +130,8 @@ fn merge_directives<S: Stage>(
     }
 }
 
-fn merge<T, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn merge<T>(
+    cx: &mut AcceptContext<'_, '_>,
     first: &mut Option<(Span, T)>,
     later: Option<(Span, T)>,
     option_name: Symbol,
@@ -155,8 +155,8 @@ fn merge<T, S: Stage>(
     }
 }
 
-fn parse_list<'p, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_list<'p>(
+    cx: &mut AcceptContext<'_, '_>,
     args: &'p ArgParser,
     mode: Mode,
 ) -> Option<&'p MetaItemListParser> {
@@ -204,8 +204,8 @@ fn parse_list<'p, S: Stage>(
     None
 }
 
-fn parse_directive_items<'p, S: Stage>(
-    cx: &mut AcceptContext<'_, '_, S>,
+fn parse_directive_items<'p>(
+    cx: &mut AcceptContext<'_, '_>,
     mode: Mode,
     items: impl Iterator<Item = &'p MetaItemOrLitParser>,
     is_root: bool,
@@ -270,7 +270,7 @@ fn parse_directive_items<'p, S: Stage>(
         // But we don't assert its presence yet because we don't want to mention it
         // if someone does something like `#[diagnostic::on_unimplemented(doesnt_exist)]`.
         // That happens in the big `match` below.
-        let value: Option<Ident> = match item.args().name_value() {
+        let value: Option<Ident> = match item.args().as_name_value() {
             Some(nv) => Some(or_malformed!(nv.value_as_ident()?)),
             None => None,
         };
