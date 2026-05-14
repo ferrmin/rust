@@ -198,6 +198,21 @@ pub struct ResolverGlobalCtxt {
     pub stripped_cfg_items: Vec<StrippedCfgItem>,
 }
 
+#[derive(Debug)]
+pub struct PerOwnerResolverData {
+    pub node_id_to_def_id: NodeMap<LocalDefId>,
+    /// The id of the owner
+    pub id: ast::NodeId,
+    /// The `DefId` of the owner, can't be found in `node_id_to_def_id`.
+    pub def_id: LocalDefId,
+}
+
+impl PerOwnerResolverData {
+    pub fn new(id: ast::NodeId, def_id: LocalDefId) -> PerOwnerResolverData {
+        PerOwnerResolverData { node_id_to_def_id: Default::default(), id, def_id }
+    }
+}
+
 /// Resolutions that should only be used for lowering.
 /// This struct is meant to be consumed by lowering.
 #[derive(Debug)]
@@ -215,7 +230,7 @@ pub struct ResolverAstLowering<'tcx> {
 
     pub next_node_id: ast::NodeId,
 
-    pub node_id_to_def_id: NodeMap<LocalDefId>,
+    pub owners: NodeMap<PerOwnerResolverData>,
 
     pub trait_map: NodeMap<&'tcx [hir::TraitCandidate<'tcx>]>,
     /// List functions and methods for which lifetime elision was successful.
@@ -1423,10 +1438,14 @@ impl Hash for FieldDef {
 }
 
 impl<'tcx> FieldDef {
-    /// Returns the type of this field. The resulting type is not normalized. The `arg` is
-    /// typically obtained via the second field of [`TyKind::Adt`].
-    pub fn ty(&self, tcx: TyCtxt<'tcx>, args: GenericArgsRef<'tcx>) -> Ty<'tcx> {
-        tcx.type_of(self.did).instantiate(tcx, args).skip_norm_wip()
+    /// Returns the type of this field. The `args` are typically obtained via
+    /// the second field of [`TyKind::Adt`].
+    pub fn ty(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        args: GenericArgsRef<'tcx>,
+    ) -> Unnormalized<'tcx, Ty<'tcx>> {
+        tcx.type_of(self.did).instantiate(tcx, args)
     }
 
     /// Computes the `Ident` of this variant by looking up the `Span`
@@ -2496,8 +2515,13 @@ fn typetree_from_ty_impl_inner<'tcx>(
 
                 for (field_idx, field_def) in adt_def.all_fields().enumerate() {
                     let field_ty = field_def.ty(tcx, args);
-                    let field_tree =
-                        typetree_from_ty_impl_inner(tcx, field_ty, depth + 1, visited, false);
+                    let field_tree = typetree_from_ty_impl_inner(
+                        tcx,
+                        field_ty.skip_norm_wip(),
+                        depth + 1,
+                        visited,
+                        false,
+                    );
 
                     let field_offset = layout.fields.offset(field_idx).bytes_usize();
 
