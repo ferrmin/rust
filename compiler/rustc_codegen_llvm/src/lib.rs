@@ -32,11 +32,10 @@ use rustc_codegen_ssa::back::write::{
 };
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::{CompiledModule, CompiledModules, CrateInfo, ModuleCodegen, TargetConfig};
-use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_errors::{DiagCtxt, DiagCtxtHandle};
 use rustc_metadata::EncodedMetadata;
-use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
+use rustc_middle::dep_graph::{WorkProduct, WorkProductMap};
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::util::Providers;
 use rustc_session::Session;
@@ -93,6 +92,8 @@ impl Drop for TimeTraceProfiler {
 }
 
 impl ExtraBackendMethods for LlvmCodegenBackend {
+    type Module = ModuleLlvm;
+
     fn codegen_allocator<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,
@@ -121,6 +122,7 @@ impl WriteBackendMethods for LlvmCodegenBackend {
     type ModuleBuffer = back::lto::ModuleBuffer;
     type TargetMachine = OwnedTargetMachine;
     type ThinData = back::lto::ThinData;
+
     fn thread_profiler() -> Box<dyn Any> {
         Box::new(TimeTraceProfiler::new())
     }
@@ -355,7 +357,7 @@ impl CodegenBackend for LlvmCodegenBackend {
         sess: &Session,
         outputs: &OutputFilenames,
         crate_info: &CrateInfo,
-    ) -> (CompiledModules, FxIndexMap<WorkProductId, WorkProduct>) {
+    ) -> (CompiledModules, WorkProductMap) {
         let (compiled_modules, work_products) = ongoing_codegen
             .downcast::<rustc_codegen_ssa::back::write::OngoingCodegen<LlvmCodegenBackend>>()
             .expect("Expected LlvmCodegenBackend's OngoingCodegen, found Box<Any>")

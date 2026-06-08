@@ -4,8 +4,7 @@
 //! various types in `rustdoc::clean`.
 //!
 //! These implementations all emit HTML. As an internal implementation detail,
-//! some of them support an alternate format that emits text, but that should
-//! not be used external to this module.
+//! some of them support an alternate format that emits plain text.
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Write};
@@ -21,8 +20,8 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::{ConstStability, StabilityLevel, StableSince};
 use rustc_metadata::creader::CStore;
 use rustc_middle::ty::{self, TyCtxt, TypingMode};
-use rustc_span::Symbol;
 use rustc_span::symbol::kw;
+use rustc_span::{Ident, Symbol};
 use tracing::{debug, trace};
 
 use super::url_parts_builder::UrlPartsBuilder;
@@ -139,7 +138,7 @@ fn print_where_predicate(predicate: &clean::WherePredicate, cx: &Context<'_>) ->
                 }
                 Ok(())
             }
-            clean::WherePredicate::EqPredicate { lhs, rhs } => {
+            clean::WherePredicate::ProjectionPredicate { lhs, rhs } => {
                 let opts = WithOpts::from(f);
                 write!(
                     f,
@@ -184,9 +183,9 @@ pub(crate) fn print_where_clause(
 
         let clause = if f.alternate() {
             if ending == Ending::Newline {
-                format!(" where{where_preds},")
+                format!(" where{where_preds:#},")
             } else {
-                format!(" where{where_preds}")
+                format!(" where{where_preds:#}")
             }
         } else {
             let mut br_with_padding = String::with_capacity(6 * indent + 28);
@@ -1110,8 +1109,23 @@ fn print_qpath_data(qpath_data: &clean::QPathData, cx: &Context<'_>) -> impl Dis
                 Some(trait_) => href(trait_.def_id(), cx).ok(),
                 None => self_type.def_id(cx.cache()).and_then(|did| href(did, cx).ok()),
             };
+            let tcx = cx.tcx();
+            let assoc_type_is_hidden = !cx.cache().document_hidden
+                && trait_.as_ref().is_some_and(|trait_| {
+                    let trait_did = trait_.def_id();
+                    tcx.associated_items(trait_did)
+                        .find_by_ident_and_kind(
+                            tcx,
+                            Ident::with_dummy_span(assoc.name),
+                            ty::AssocTag::Type,
+                            trait_did,
+                        )
+                        .is_some_and(|assoc_item| tcx.is_doc_hidden(assoc_item.def_id))
+                });
 
-            if let Some(HrefInfo { url, rust_path, .. }) = parent_href {
+            if let Some(HrefInfo { url, rust_path, .. }) = parent_href
+                && !assoc_type_is_hidden
+            {
                 write!(
                     f,
                     "<a class=\"associatedtype\" href=\"{url}#{shortty}.{name}\" \

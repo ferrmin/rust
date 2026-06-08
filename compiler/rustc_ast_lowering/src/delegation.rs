@@ -37,29 +37,32 @@
 //! also be emitted during HIR ty lowering.
 
 use std::iter;
+use std::ops::ControlFlow;
 
 use ast::visit::Visitor;
 use hir::def::{DefKind, Res};
 use hir::{BodyId, HirId};
 use rustc_abi::ExternAbi;
 use rustc_ast as ast;
+use rustc_ast::node_id::NodeMap;
 use rustc_ast::*;
-use rustc_data_structures::fx::FxHashSet;
-use rustc_errors::ErrorGuaranteed;
+use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
 use rustc_hir::attrs::{AttributeKind, InlineAttr};
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, FnDeclFlags};
 use rustc_middle::span_bug;
-use rustc_middle::ty::Asyncness;
+use rustc_middle::ty::{Asyncness, PerOwnerResolverData, TyCtxt};
 use rustc_span::symbol::kw;
-use rustc_span::{Ident, Span, Symbol};
-use smallvec::SmallVec;
+use rustc_span::{ErrorGuaranteed, Ident, Span, Symbol};
 
 use crate::delegation::generics::{GenericsGenerationResult, GenericsGenerationResults};
-use crate::errors::{CycleInDelegationSignatureResolution, UnresolvedDelegationCallee};
+use crate::diagnostics::{
+    CycleInDelegationSignatureResolution, DelegationAttemptedBlockWithDefsDeletion,
+    DelegationBlockSpecifiedWhenNoParams, UnresolvedDelegationCallee,
+};
 use crate::{
     AllowReturnTypeNotation, ImplTraitContext, ImplTraitPosition, LoweringContext, ParamMode,
-    ResolverAstLoweringExt,
+    ResolverAstLoweringExt, index_crate,
 };
 
 mod generics;
@@ -105,6 +108,66 @@ static ATTRS_ADDITIONS: &[AttrAdditionInfo] = &[
     },
 ];
 
+pub(crate) fn delegations_resolutions(
+    tcx: TyCtxt<'_>,
+    _: (),
+) -> FxIndexMap<LocalDefId, Result<DefId, ErrorGuaranteed>> {
+    let krate = tcx.hir_crate(());
+
+    let (resolver, ast_crate) = &*krate.delayed_resolver.borrow();
+
+    // FIXME!!!(fn_delegation): make ast index lifetime same as resolver,
+    // as it is too bad to reindex whole crate on each delegation lowering.
+    let ast_index = index_crate(resolver, ast_crate);
+
+    let mut result = FxIndexMap::<LocalDefId, Result<DefId, ErrorGuaranteed>>::default();
+
+    for &def_id in &krate.delayed_ids {
+        let delegation = ast_index[def_id].delegation().expect("processing delegations");
+        let span = delegation.last_segment_span();
+
+        if let Some(info) = resolver.delegation_info(def_id) {
+            let res = info.resolution_id.map(|id| check_for_cycles(tcx, id, span).map(|_| id));
+            result.insert(def_id, res.flatten());
+        } else {
+            tcx.dcx().span_delayed_bug(
+                span,
+                format!("delegation resolution record was not found for {def_id:?}"),
+            );
+        }
+    }
+
+    result
+}
+
+fn check_for_cycles(tcx: TyCtxt<'_>, mut def_id: DefId, span: Span) -> Result<(), ErrorGuaranteed> {
+    let mut visited: FxHashSet<DefId> = Default::default();
+
+    let (resolver, _) = &*tcx.hir_crate(()).delayed_resolver.borrow();
+
+    loop {
+        visited.insert(def_id);
+
+        // If def_id is in local crate and it corresponds to another delegation
+        // it means that we refer to another delegation as a callee, so in order to obtain
+        // a signature DefId we obtain NodeId of the callee delegation and try to get signature from it.
+        if let Some(local_id) = def_id.as_local()
+            && let Some(info) = resolver.delegation_info(local_id)
+            && let Ok(id) = info.resolution_id
+        {
+            def_id = id;
+            if visited.contains(&def_id) {
+                return Err(match visited.len() {
+                    1 => tcx.dcx().emit_err(UnresolvedDelegationCallee { span }),
+                    _ => tcx.dcx().emit_err(CycleInDelegationSignatureResolution { span }),
+                });
+            }
+        } else {
+            return Ok(());
+        }
+    }
+}
+
 impl<'hir> LoweringContext<'_, 'hir> {
     fn is_method(&self, def_id: DefId, span: Span) -> bool {
         match self.tcx.def_kind(def_id) {
@@ -119,13 +182,13 @@ impl<'hir> LoweringContext<'_, 'hir> {
         delegation: &Delegation,
         item_id: NodeId,
     ) -> DelegationResults<'hir> {
-        let span = self.lower_span(delegation.path.segments.last().unwrap().ident.span);
+        let span = self.lower_span(delegation.last_segment_span());
 
-        // Delegation can be unresolved in illegal places such as function bodies in extern blocks (see #151356)
-        let sig_id = if let Some(delegation_info) = self.resolver.delegation_info(self.owner.def_id)
-        {
-            self.get_sig_id(delegation_info.resolution_node, span)
-        } else {
+        let sig_id = self.tcx.delegations_resolutions(()).get(&self.owner.def_id).copied();
+
+        // Delegation can be missing from the `delegations_resolutions` table
+        // in illegal places such as function bodies in extern blocks (see #151356).
+        let Some(Ok(sig_id)) = sig_id else {
             self.dcx().span_delayed_bug(
                 span,
                 format!("LoweringContext: the delegation {:?} is unresolved", item_id),
@@ -134,49 +197,119 @@ impl<'hir> LoweringContext<'_, 'hir> {
             return self.generate_delegation_error(span, delegation);
         };
 
-        match sig_id {
-            Ok(sig_id) => {
-                self.add_attrs_if_needed(span, sig_id);
+        self.add_attrs_if_needed(span, sig_id);
 
-                let is_method = self.is_method(sig_id, span);
+        let is_method = self.is_method(sig_id, span);
 
-                let (param_count, c_variadic) = self.param_count(sig_id);
+        let (param_count, c_variadic) = self.param_count(sig_id);
 
-                let mut generics = self.uplift_delegation_generics(delegation, sig_id, is_method);
-
-                let (body_id, call_expr_id) = self.lower_delegation_body(
-                    delegation,
-                    is_method,
-                    param_count,
-                    &mut generics,
-                    span,
-                );
-
-                let decl = self.lower_delegation_decl(
-                    sig_id,
-                    param_count,
-                    c_variadic,
-                    span,
-                    &generics,
-                    delegation.id,
-                    call_expr_id,
-                );
-
-                let sig = self.lower_delegation_sig(sig_id, decl, span);
-                let ident = self.lower_ident(delegation.ident);
-
-                let generics = self.arena.alloc(hir::Generics {
-                    has_where_clause_predicates: false,
-                    params: self.arena.alloc_from_iter(generics.all_params()),
-                    predicates: self.arena.alloc_from_iter(generics.all_predicates()),
-                    span,
-                    where_clause_span: span,
-                });
-
-                DelegationResults { body_id, sig, ident, generics }
-            }
-            Err(_) => self.generate_delegation_error(span, delegation),
+        if !self.check_block_soundness(delegation, sig_id, is_method, param_count) {
+            return self.generate_delegation_error(span, delegation);
         }
+
+        let mut generics = self.uplift_delegation_generics(delegation, sig_id, is_method);
+
+        let (body_id, call_expr_id) =
+            self.lower_delegation_body(delegation, sig_id, param_count, &mut generics, span);
+
+        let decl = self.lower_delegation_decl(
+            sig_id,
+            param_count,
+            c_variadic,
+            span,
+            &generics,
+            delegation.id,
+            call_expr_id,
+        );
+
+        let sig = self.lower_delegation_sig(sig_id, decl, span);
+        let ident = self.lower_ident(delegation.ident);
+
+        let generics = self.arena.alloc(hir::Generics {
+            has_where_clause_predicates: false,
+            params: self.arena.alloc_from_iter(generics.all_params()),
+            predicates: self.arena.alloc_from_iter(generics.all_predicates()),
+            span,
+            where_clause_span: span,
+        });
+
+        DelegationResults { body_id, sig, ident, generics }
+    }
+
+    fn check_block_soundness(
+        &self,
+        delegation: &Delegation,
+        sig_id: DefId,
+        is_method: bool,
+        param_count: usize,
+    ) -> bool {
+        let Some(block) = delegation.body.as_ref() else { return true };
+        let should_generate_block = self.should_generate_block(delegation, sig_id, is_method);
+
+        // Report an error if user has explicitly specified delegation's target expression
+        // in a single delegation when reused function has no params.
+        if param_count == 0 && should_generate_block {
+            self.dcx().emit_err(DelegationBlockSpecifiedWhenNoParams { span: block.span });
+            return false;
+        }
+
+        struct DefinitionsFinder<'a> {
+            all_owners: &'a NodeMap<PerOwnerResolverData<'a>>,
+            // `self.owner.node_id_to_def_id`
+            nested_def_ids: &'a NodeMap<LocalDefId>,
+        }
+
+        impl<'a> ast::visit::Visitor<'a> for DefinitionsFinder<'a> {
+            type Result = ControlFlow<()>;
+
+            fn visit_id(&mut self, id: NodeId) -> Self::Result {
+                /*
+                    (from `tests\ui\delegation\target-expr-removal-defs-inside.rs`):
+                    ```rust
+                        reuse impl Trait for S1 {
+                            some::path::<{ fn foo() {} }>::xd();
+                            fn foo() {}
+                            self.0
+                        }
+                    ```
+
+                    Constant from unresolved path will be in `nested_owners`,
+                    `fn foo() {}` will not be in `nested_owners` but will be in `owners`,
+                    both have `LocalDefId`, so we check those two maps.
+                */
+                match self.all_owners.contains_key(&id) || self.nested_def_ids.contains_key(&id) {
+                    true => ControlFlow::Break(()),
+                    false => ControlFlow::Continue(()),
+                }
+            }
+        }
+
+        let mut collector = DefinitionsFinder {
+            all_owners: &self.resolver.owners,
+            nested_def_ids: &self.owner.node_id_to_def_id,
+        };
+
+        let contains_defs = collector.visit_block(block).is_break();
+
+        // If there are definitions inside and we can't delete target expression, so report an error.
+        // FIXME(fn_delegation): support deletion of target expression with defs inside.
+        if !should_generate_block && contains_defs {
+            self.dcx().emit_err(DelegationAttemptedBlockWithDefsDeletion { span: block.span });
+            return false;
+        }
+
+        true
+    }
+
+    fn should_generate_block(
+        &self,
+        delegation: &Delegation,
+        sig_id: DefId,
+        is_method: bool,
+    ) -> bool {
+        is_method
+            || matches!(self.tcx.def_kind(sig_id), DefKind::Fn)
+            || matches!(delegation.source, DelegationSource::Single)
     }
 
     fn add_attrs_if_needed(&mut self, span: Span, sig_id: DefId) {
@@ -228,46 +361,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 }
             })
             .collect::<Vec<_>>()
-    }
-
-    fn get_sig_id(&self, mut node_id: NodeId, span: Span) -> Result<DefId, ErrorGuaranteed> {
-        let mut visited: FxHashSet<NodeId> = Default::default();
-        let mut path: SmallVec<[DefId; 1]> = Default::default();
-
-        loop {
-            visited.insert(node_id);
-
-            let Some(def_id) = self.get_resolution_id(node_id) else {
-                return Err(self.tcx.dcx().span_delayed_bug(
-                    span,
-                    format!(
-                        "LoweringContext: couldn't resolve node {:?} in delegation item",
-                        node_id
-                    ),
-                ));
-            };
-
-            path.push(def_id);
-
-            // If def_id is in local crate and it corresponds to another delegation
-            // it means that we refer to another delegation as a callee, so in order to obtain
-            // a signature DefId we obtain NodeId of the callee delegation and try to get signature from it.
-            if let Some(local_id) = def_id.as_local()
-                && let Some(delegation_info) = self.resolver.delegation_info(local_id)
-            {
-                node_id = delegation_info.resolution_node;
-                if visited.contains(&node_id) {
-                    // We encountered a cycle in the resolution, or delegation callee refers to non-existent
-                    // entity, in this case emit an error.
-                    return Err(match visited.len() {
-                        1 => self.dcx().emit_err(UnresolvedDelegationCallee { span }),
-                        _ => self.dcx().emit_err(CycleInDelegationSignatureResolution { span }),
-                    });
-                }
-            } else {
-                return Ok(path[0]);
-            }
-        }
     }
 
     fn get_resolution_id(&self, node_id: NodeId) -> Option<DefId> {
@@ -407,7 +500,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
     fn lower_delegation_body(
         &mut self,
         delegation: &Delegation,
-        is_method: bool,
+        sig_id: DefId,
         param_count: usize,
         generics: &mut GenericsGenerationResults<'hir>,
         span: Span,
@@ -418,13 +511,20 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let block_id = self.lower_body(|this| {
             let mut parameters: Vec<hir::Param<'_>> = Vec::with_capacity(param_count);
             let mut args: Vec<hir::Expr<'_>> = Vec::with_capacity(param_count);
+            let mut stmts: &[hir::Stmt<'hir>] = &[];
+
+            let is_method = this.is_method(sig_id, span);
 
             for idx in 0..param_count {
                 let (param, pat_node_id) = this.generate_param(is_method, idx, span);
                 parameters.push(param);
 
+                let generate_arg =
+                    |this: &mut Self| this.generate_arg(is_method, idx, param.pat.hir_id, span);
+
                 let arg = if let Some(block) = block
                     && idx == 0
+                    && this.should_generate_block(delegation, sig_id, is_method)
                 {
                     let mut self_resolver = SelfResolver {
                         ctxt: this,
@@ -434,26 +534,29 @@ impl<'hir> LoweringContext<'_, 'hir> {
                     self_resolver.visit_block(block);
                     // Target expr needs to lower `self` path.
                     this.ident_and_label_to_local_id.insert(pat_node_id, param.pat.hir_id.local_id);
-                    this.lower_target_expr(&block)
+
+                    // Lower with `HirId::INVALID` as we will use only expr and stmts.
+                    // FIXME(fn_delegation): Alternatives for target expression lowering:
+                    // https://github.com/rust-lang/rfcs/pull/3530#issuecomment-2197170600.
+                    let block = this.lower_block_noalloc(HirId::INVALID, block, false);
+
+                    stmts = block.stmts;
+
+                    // The behavior of the delegation's target expression differs from the
+                    // behavior of the usual block, where if there is no final expression
+                    // the `()` is returned. In case of the similar situation in delegation
+                    // (no final expression) we propagate first argument instead of replacing
+                    // it with `()`.
+                    if let Some(&expr) = block.expr { expr } else { generate_arg(this) }
                 } else {
-                    this.generate_arg(is_method, idx, param.pat.hir_id, span)
+                    generate_arg(this)
                 };
+
                 args.push(arg);
             }
 
-            // If we have no params in signature function but user still wrote some code in
-            // delegation body, then add this code as first arg, eventually an error will be shown,
-            // also nested delegations may need to access information about this code (#154332),
-            // so it is better to leave this code as opposed to bodies of extern functions,
-            // which are completely erased from existence.
-            if param_count == 0
-                && let Some(block) = block
-            {
-                args.push(this.lower_target_expr(&block));
-            }
-
             let (final_expr, hir_id) =
-                this.finalize_body_lowering(delegation, args, generics, span);
+                this.finalize_body_lowering(delegation, stmts, args, generics, span);
 
             call_expr_id = hir_id;
 
@@ -465,22 +568,10 @@ impl<'hir> LoweringContext<'_, 'hir> {
         (block_id, call_expr_id)
     }
 
-    // FIXME(fn_delegation): Alternatives for target expression lowering:
-    // https://github.com/rust-lang/rfcs/pull/3530#issuecomment-2197170600.
-    fn lower_target_expr(&mut self, block: &Block) -> hir::Expr<'hir> {
-        if let [stmt] = block.stmts.as_slice()
-            && let StmtKind::Expr(expr) = &stmt.kind
-        {
-            return self.lower_expr_mut(expr);
-        }
-
-        let block = self.lower_block(block, false);
-        self.mk_expr(hir::ExprKind::Block(block, None), block.span)
-    }
-
     fn finalize_body_lowering(
         &mut self,
         delegation: &Delegation,
+        stmts: &'hir [hir::Stmt<'hir>],
         args: Vec<hir::Expr<'hir>>,
         generics: &mut GenericsGenerationResults<'hir>,
         span: Span,
@@ -532,7 +623,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let call = self.arena.alloc(self.mk_expr(hir::ExprKind::Call(callee_path, args), span));
 
         let block = self.arena.alloc(hir::Block {
-            stmts: &[],
+            stmts,
             expr: Some(call),
             hir_id: self.next_id(),
             rules: hir::BlockCheckMode::DefaultBlock,
@@ -597,7 +688,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
 
             let callee_path = this.arena.alloc(this.mk_expr(hir::ExprKind::Path(path), span));
             let args = if let Some(block) = delegation.body.as_ref() {
-                this.arena.alloc_slice(&[this.lower_target_expr(block)])
+                this.arena.alloc_slice(&[this.lower_block_expr(block)])
             } else {
                 &mut []
             };

@@ -1193,8 +1193,6 @@ pub enum WherePredicateKind<'hir> {
     BoundPredicate(WhereBoundPredicate<'hir>),
     /// A lifetime predicate (e.g., `'a: 'b + 'c`).
     RegionPredicate(WhereRegionPredicate<'hir>),
-    /// An equality predicate (unsupported).
-    EqPredicate(WhereEqPredicate<'hir>),
 }
 
 impl<'hir> WherePredicateKind<'hir> {
@@ -1202,7 +1200,6 @@ impl<'hir> WherePredicateKind<'hir> {
         match self {
             WherePredicateKind::BoundPredicate(p) => p.origin == PredicateOrigin::WhereClause,
             WherePredicateKind::RegionPredicate(p) => p.in_where_clause,
-            WherePredicateKind::EqPredicate(_) => false,
         }
     }
 
@@ -1210,7 +1207,6 @@ impl<'hir> WherePredicateKind<'hir> {
         match self {
             WherePredicateKind::BoundPredicate(p) => p.bounds,
             WherePredicateKind::RegionPredicate(p) => p.bounds,
-            WherePredicateKind::EqPredicate(_) => &[],
         }
     }
 }
@@ -2325,6 +2321,13 @@ impl CoroutineKind {
 
     pub fn is_fn_like(self) -> bool {
         matches!(self, CoroutineKind::Desugared(_, CoroutineSource::Fn))
+    }
+
+    pub fn is_async_desugaring(self) -> bool {
+        matches!(
+            self,
+            CoroutineKind::Desugared(CoroutineDesugaring::Async | CoroutineDesugaring::AsyncGen, _)
+        )
     }
 
     pub fn to_plural_string(&self) -> String {
@@ -5246,6 +5249,7 @@ impl<'hir> Node<'hir> {
                 GenericParamKind::Type { default, .. } => default,
                 GenericParamKind::Const { ty, .. } => Some(ty),
             },
+            Node::Field(f) => Some(f.ty),
             _ => None,
         }
     }

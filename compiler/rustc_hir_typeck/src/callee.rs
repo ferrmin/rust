@@ -205,6 +205,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             | CanonAbi::Rust
             | CanonAbi::RustCold
             | CanonAbi::RustPreserveNone
+            | CanonAbi::RustTail
             | CanonAbi::Swift
             | CanonAbi::Arm(_)
             | CanonAbi::X86(_) => {}
@@ -845,7 +846,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         let mut path = None;
         let mut err = self.dcx().create_err(errors::InvalidCallee {
             span: callee_expr.span,
-            ty: callee_ty,
             found: match &unit_variant {
                 Some((_, kind, path)) => format!("{kind} `{path}`"),
                 None => format!("`{}`", self.tcx.short_string(callee_ty, &mut path)),
@@ -949,7 +949,6 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
 
         if let Some(span) = self.tcx.hir_res_span(def) {
-            let callee_ty = callee_ty.to_string();
             let label = match (unit_variant, inner_callee_path) {
                 (Some((_, kind, path)), _) => {
                     err.arg("kind", kind);
@@ -959,6 +958,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 (_, Some(hir::QPath::Resolved(_, path))) => {
                     self.tcx.sess.source_map().span_to_snippet(path.span).ok().map(|p| {
                         err.arg("func", p);
+                        err.arg("ty", callee_ty);
                         msg!("`{$func}` defined here returns `{$ty}`")
                     })
                 }
@@ -968,6 +968,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         // type definitions themselves, but rather variables *of* that type.
                         Res::Local(hir_id) => {
                             err.arg("local_name", self.tcx.hir_name(hir_id));
+                            err.arg("ty", callee_ty);
                             Some(msg!("`{$local_name}` has type `{$ty}`"))
                         }
                         Res::Def(kind, def_id) if kind.ns() == Some(Namespace::ValueNS) => {
@@ -975,7 +976,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             Some(msg!("`{$path}` defined here"))
                         }
                         _ => {
-                            err.arg("path", callee_ty);
+                            err.arg("path", callee_ty.to_string());
                             Some(msg!("`{$path}` defined here"))
                         }
                     }
