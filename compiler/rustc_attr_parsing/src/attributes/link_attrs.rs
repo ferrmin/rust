@@ -489,7 +489,10 @@ fn check_link_section_macho(name: Symbol) -> Result<(), InvalidMachoSectionReaso
 impl SingleAttributeParser for LinkSectionParser {
     const PATH: &[Symbol] = &[sym::link_section];
     const ON_DUPLICATE: OnDuplicate = OnDuplicate::WarnButFutureError;
-    const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: Some(Edition2024) };
+    const SAFETY: AttributeSafety = AttributeSafety::Unsafe {
+        note: "the program's behavior with overridden link sections on items is unpredictable and Rust cannot provide guarantees when you manually override them",
+        unsafe_since: Some(Edition2024),
+    };
     const STABILITY: AttributeStability = AttributeStability::Stable;
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowListWarnRest(&[
         Allow(Target::Static),
@@ -532,7 +535,18 @@ impl SingleAttributeParser for LinkSectionParser {
 pub(crate) struct ExportStableParser;
 impl NoArgsAttributeParser for ExportStableParser {
     const PATH: &[Symbol] = &[sym::export_stable];
-    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(ALL_TARGETS); //FIXME Still checked fully in `check_attr.rs`
+    const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
+        Allow(Target::Fn),
+        Allow(Target::Method(MethodKind::Inherent)),
+        Allow(Target::Struct),
+        Allow(Target::Enum),
+        Allow(Target::Union),
+        Allow(Target::TyAlias),
+        Allow(Target::AssocTy),
+        Allow(Target::Use),
+        Allow(Target::Mod),
+        Allow(Target::Impl { of_trait: false }),
+    ]);
     const STABILITY: AttributeStability = unstable!(export_stable);
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::ExportStable;
 }
@@ -540,7 +554,10 @@ impl NoArgsAttributeParser for ExportStableParser {
 pub(crate) struct FfiConstParser;
 impl NoArgsAttributeParser for FfiConstParser {
     const PATH: &[Symbol] = &[sym::ffi_const];
-    const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: None };
+    const SAFETY: AttributeSafety = AttributeSafety::Unsafe {
+        note: "`#[ffi_const]` functions shall have no effects except for its return value, which can only depend on the values of the function parameters, and is not affected by changes to the observable state of the program.",
+        unsafe_since: None,
+    };
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::ForeignFn)]);
     const STABILITY: AttributeStability = unstable!(ffi_const);
     const CREATE: fn(Span) -> AttributeKind = |_| AttributeKind::FfiConst;
@@ -549,7 +566,10 @@ impl NoArgsAttributeParser for FfiConstParser {
 pub(crate) struct FfiPureParser;
 impl NoArgsAttributeParser for FfiPureParser {
     const PATH: &[Symbol] = &[sym::ffi_pure];
-    const SAFETY: AttributeSafety = AttributeSafety::Unsafe { unsafe_since: None };
+    const SAFETY: AttributeSafety = AttributeSafety::Unsafe {
+        note: "`#[ffi_pure]` functions shall have no effects except for its return value, which shall not change across two consecutive function calls with the same parameters.",
+        unsafe_since: None,
+    };
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[Allow(Target::ForeignFn)]);
     const STABILITY: AttributeStability = unstable!(ffi_pure);
     const CREATE: fn(Span) -> AttributeKind = AttributeKind::FfiPure;
