@@ -2082,17 +2082,18 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             self.tcx
                 .sess
                 .time("finalize_macro_resolutions", || self.finalize_macro_resolutions(krate));
-            self.tcx.sess.time("late_resolve_crate", || self.late_resolve_crate(krate));
+            let use_items =
+                self.tcx.sess.time("late_resolve_crate", || self.late_resolve_crate(krate));
             self.tcx.sess.time("resolve_main", || self.resolve_main());
-            self.tcx.sess.time("resolve_check_unused", || self.check_unused(krate));
+            self.tcx.sess.time("resolve_check_unused", || self.check_unused(use_items));
             self.tcx.sess.time("resolve_report_errors", || self.report_errors(krate));
             self.tcx
                 .sess
                 .time("resolve_postprocess", || self.cstore_mut().postprocess(self.tcx, krate));
         });
 
-        // Make sure we don't mutate the cstore from here on.
-        self.tcx.untracked().cstore.freeze();
+        // Don't mutate the cstore or stable crate id map from here on.
+        self.tcx.untracked().freeze_cstore();
     }
 
     fn traits_in_scope(
