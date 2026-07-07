@@ -26,6 +26,7 @@ use crate::{
     Determinacy, ExternModule, Finalize, IdentKey, ImportKind, ImportSummary, LateDecl,
     LocalModule, Module, ModuleKind, ModuleOrUniformRoot, ParentScope, PathResult, PrivacyError,
     Res, ResolutionError, Resolver, Scope, ScopeSet, Segment, Stage, Symbol, Used, diagnostics,
+    module_to_string,
 };
 
 #[derive(Copy, Clone)]
@@ -1148,12 +1149,14 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         ignore_import: Option<Import<'ra>>,
     ) -> Result<Decl<'ra>, ControlFlow<Determinacy, Determinacy>> {
         let key = BindingKey::new(ident, ns);
-        let resolution_ref = self.resolution_or_default(module.to_module(), key, orig_ident_span);
-        let resolution = resolution_ref.borrow();
+        let resolution = self.resolution(module.to_module(), key);
 
-        let binding = resolution.non_glob_decl.filter(|b| Some(*b) != ignore_decl);
+        let binding =
+            resolution.as_ref().and_then(|r| r.non_glob_decl).filter(|b| Some(*b) != ignore_decl);
 
         if let Some(finalize) = finalize {
+            // finalize implies that the module is fully expanded
+            assert!(!module.has_unexpanded_invocations());
             return self.get_mut().finalize_module_binding(
                 ident,
                 orig_ident_span,
@@ -1170,21 +1173,23 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             return if accessible { Ok(binding) } else { Err(ControlFlow::Break(Determined)) };
         }
 
-        // We need to detect resolution cycles to avoid infinite recursion. The guard ensures
-        // the resolution is removed when this resolve call ends.
-        let _cycle_guard = cycle_detection::enter_cycle_detector(resolution_ref)
-            .map_err(|_| ControlFlow::Continue(Determined))?;
+        if let Some(resolution) = resolution {
+            // We need to detect resolution cycles to avoid infinite recursion. The guard ensures
+            // the resolution is removed when this resolve call ends.
+            let _cycle_guard = cycle_detection::enter_cycle_detector(module, key)
+                .map_err(|_| ControlFlow::Continue(Determined))?;
 
-        // Check if one of single imports can still define the name, block if it can.
-        if self.reborrow().single_import_can_define_name(
-            &resolution,
-            None,
-            ns,
-            ignore_import,
-            ignore_decl,
-            parent_scope,
-        ) {
-            return Err(ControlFlow::Break(Undetermined));
+            // Check if one of single imports can still define the name, block if it can.
+            if self.reborrow().single_import_can_define_name(
+                &resolution,
+                None,
+                ns,
+                ignore_import,
+                ignore_decl,
+                parent_scope,
+            ) {
+                return Err(ControlFlow::Break(Undetermined));
+            }
         }
 
         // Check if one of unexpanded macros can still define the name.
@@ -1210,12 +1215,14 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         ignore_import: Option<Import<'ra>>,
     ) -> Result<Decl<'ra>, ControlFlow<Determinacy, Determinacy>> {
         let key = BindingKey::new(ident, ns);
-        let resolution_ref = self.resolution_or_default(module.to_module(), key, orig_ident_span);
-        let resolution = resolution_ref.borrow();
+        let resolution = self.resolution(module.to_module(), key);
 
-        let binding = resolution.glob_decl.filter(|b| Some(*b) != ignore_decl);
+        let binding =
+            resolution.as_ref().and_then(|r| r.glob_decl).filter(|b| Some(*b) != ignore_decl);
 
         if let Some(finalize) = finalize {
+            // finalize implies that the module is fully expanded
+            assert!(!module.has_unexpanded_invocations());
             return self.get_mut().finalize_module_binding(
                 ident,
                 orig_ident_span,
@@ -1228,20 +1235,22 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
         // We need to detect resolution cycles to avoid infinite recursion. The guard ensures
         // the resolution is removed when this resolve call ends.
-        let _cycle_guard = cycle_detection::enter_cycle_detector(resolution_ref)
+        let _cycle_guard = cycle_detection::enter_cycle_detector(module, key)
             .map_err(|_| ControlFlow::Continue(Determined))?;
 
         // Check if one of single imports can still define the name,
         // if it can then our result is not determined and can be invalidated.
-        if self.reborrow().single_import_can_define_name(
-            &resolution,
-            binding,
-            ns,
-            ignore_import,
-            ignore_decl,
-            parent_scope,
-        ) {
-            return Err(ControlFlow::Break(Undetermined));
+        if let Some(resolution) = resolution {
+            if self.reborrow().single_import_can_define_name(
+                &resolution,
+                binding,
+                ns,
+                ignore_import,
+                ignore_decl,
+                parent_scope,
+            ) {
+                return Err(ControlFlow::Break(Undetermined));
+            }
         }
 
         // So we have a resolution that's from a glob import. This resolution is determined
@@ -1865,6 +1874,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         module = Some(ModuleOrUniformRoot::Module(parent));
                         continue;
                     }
+                    let mut ctxt = ident.span.ctxt().normalize_to_macros_2_0();
+                    let current_module = self.resolve_self(&mut ctxt, parent_scope.module);
+                    let current_module_path = module_to_string(current_module)
+                        .map_or_else(|| "crate".to_string(), |path| format!("crate::{path}"));
                     return PathResult::failed(
                         ident,
                         false,
@@ -1873,8 +1886,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         module,
                         || {
                             (
-                                "too many leading `super` keywords".to_string(),
-                                "there are too many leading `super` keywords".to_string(),
+                                format!(
+                                    "too many leading `super` keywords within `{current_module_path}`"
+                                ),
+                                "this `super` would go above the crate root".to_string(),
                                 None,
                                 None,
                             )
