@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs, iter};
 
-use build_helper::exit;
-
 use crate::core::build_steps::compile::{ArtifactKeepMode, Std, run_cargo};
 use crate::core::build_steps::doc::{DocumentationFormat, prepare_doc_compiler};
 use crate::core::build_steps::gcc::{Gcc, GccTargetPair, add_cg_gcc_cargo_flags};
@@ -44,7 +42,7 @@ use crate::utils::helpers::{
     up_to_date,
 };
 use crate::utils::render_tests::{add_flags_and_try_run_tests, try_run_tests};
-use crate::{CLang, CodegenBackendKind, GitRepo, Mode, PathSet, TestTarget, envify};
+use crate::{CLang, CodegenBackendKind, GitRepo, Mode, PathSet, TestTarget, envify, exit};
 
 mod compiletest;
 pub mod failed_tests;
@@ -1977,6 +1975,12 @@ impl Step for Coverage {
         for mode in Self::ALL_MODES {
             run = run.alias(mode.as_str());
         }
+
+        // Allow `./x test --skip=tests` to properly skip the coverage tests,
+        // by not treating the `coverage-map` and `coverage-run` aliases as
+        // implied command-line arguments.
+        run = run.default_to_suites_only();
+
         run
     }
 
@@ -2017,13 +2021,6 @@ impl Step for Coverage {
         modes.retain(|mode| {
             !run.builder.config.skip.iter().any(|skip| skip == Path::new(mode.as_str()))
         });
-
-        // FIXME(Zalathar): Make these commands skip all coverage tests, as expected:
-        // - `./x test --skip=tests`
-        // - `./x test --skip=tests/coverage`
-        // - `./x test --skip=coverage`
-        // Skip handling currently doesn't have a way to know that skipping the coverage
-        // suite should also skip the `coverage-map` and `coverage-run` aliases.
 
         for mode in modes {
             run.builder.ensure(Coverage { compiler, target, mode });

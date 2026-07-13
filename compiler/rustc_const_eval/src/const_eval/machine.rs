@@ -18,7 +18,7 @@ use rustc_target::callconv::FnAbi;
 use tracing::debug;
 
 use super::error::*;
-use crate::errors::{LongRunning, LongRunningWarn};
+use crate::diagnostics::{LongRunning, LongRunningWarn};
 use crate::interpret::{
     self, AllocId, AllocInit, AllocRange, ConstAllocation, CtfeProvenance, FnArg, Frame,
     GlobalAlloc, ImmTy, InterpCx, InterpResult, OpTy, PlaceTy, Pointer, RangeSet, RetagMode,
@@ -772,6 +772,7 @@ impl<'tcx> interpret::Machine<'tcx> for CompileTimeMachine<'tcx> {
                 found: eval_to_int(found)?,
             },
             NullPointerDereference => NullPointerDereference,
+            NullReferenceConstructed => NullReferenceConstructed,
             InvalidEnumConstruction(source) => InvalidEnumConstruction(eval_to_int(source)?),
         };
         Err(ConstEvalErrKind::AssertFailure(err)).into()
