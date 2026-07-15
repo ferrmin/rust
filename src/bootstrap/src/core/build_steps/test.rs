@@ -4,7 +4,7 @@
 //! However, this contains ~all test parts we expect people to be able to build and run locally.
 
 // (This file should be split up, but having tidy block all changes is not helpful.)
-// ignore-tidy-filelength
+// ignore-tidy-file-filelength
 
 use std::collections::HashSet;
 use std::env::split_paths;
@@ -1085,10 +1085,12 @@ impl Step for IntrinsicTest {
         cmd.env("CFLAGS", cflags);
         // intrinsic-test shells out to `cargo` and `rustfmt` make bootstrap's
         // managed binaries findable by prepending their dirs to PATH.
-        let rustfmt_path = builder.config.initial_rustfmt.clone().unwrap_or_else(|| {
-            eprintln!("intrinsic-test: rustfmt is required but not available on this channel");
-            crate::exit!(1);
-        });
+        let Some(rustfmt_path) = builder.config.initial_rustfmt.clone() else {
+            eprintln!(
+                "WARNING: intrinsic-test skipped because rustfmt is required but not available on this channel"
+            );
+            return;
+        };
 
         let mut path_dirs: Vec<PathBuf> = Vec::new();
         if let Some(cargo_dir) = builder.initial_cargo.parent() {

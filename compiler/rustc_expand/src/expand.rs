@@ -29,7 +29,7 @@ use rustc_parse::parser::{
     AllowConstBlockItems, AttemptLocalParseRecovery, CommaRecoveryMode, ForceCollect, Parser,
     RecoverColon, RecoverComma, Recovery, token_descr,
 };
-use rustc_session::errors::feature_err;
+use rustc_session::diagnostics::feature_err;
 use rustc_session::lint::builtin::{UNUSED_ATTRIBUTES, UNUSED_DOC_COMMENTS};
 use rustc_span::hygiene::SyntaxContext;
 use rustc_span::{ErrorGuaranteed, FileName, Ident, LocalExpnId, Span, Symbol, sym};
@@ -1905,7 +1905,7 @@ impl InvocationCollectorNode for ast::Pat {
         }
     }
     fn as_target(&self) -> Target {
-        todo!();
+        unimplemented!();
     }
 }
 

@@ -15,7 +15,7 @@ use rustc_errors::{
     Applicability, Diag, DiagCtxtHandle, ErrorGuaranteed, PResult, Subdiagnostic, Suggestions, msg,
     pluralize,
 };
-use rustc_session::errors::ExprParenthesesNeeded;
+use rustc_session::diagnostics::ExprParenthesesNeeded;
 use rustc_span::symbol::used_keywords;
 use rustc_span::{BytePos, DUMMY_SP, Ident, Span, SpanSnippetError, Spanned, Symbol, kw, sym};
 use thin_vec::{ThinVec, thin_vec};
@@ -873,7 +873,7 @@ impl<'a> Parser<'a> {
                 && let ast::AttrKind::Normal(next_attr_kind) = next_attr.kind
                 && let Some(next_attr_args_span) = next_attr_kind.item.args.span()
                 && let [next_segment] = &next_attr_kind.item.path.segments[..]
-                && segment.ident.name == sym::cfg
+                && next_segment.ident.name == sym::cfg
             {
                 let next_expr = match snapshot.parse_expr() {
                     Ok(next_expr) => next_expr,
