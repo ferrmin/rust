@@ -241,6 +241,7 @@ provide! { tcx, def_id, other, cdata,
     fn_sig => { table }
     codegen_fn_attrs => { table }
     impl_trait_header => { table }
+    impl_is_fully_generic_for_reflection => { table_direct }
     const_param_default => { table }
     object_lifetime_default => { table }
     thir_abstract_const => { table }
@@ -399,6 +400,7 @@ provide! { tcx, def_id, other, cdata,
     intrinsic_raw => { cdata.get_intrinsic(tcx, def_id.index) }
     defined_lang_items => { cdata.get_lang_items(tcx) }
     diagnostic_items => { cdata.get_diagnostic_items(tcx) }
+    canonical_symbols => { cdata.get_canonical_symbols(tcx) }
     missing_lang_items => { cdata.get_missing_lang_items(tcx) }
 
     missing_extern_crate_item => {

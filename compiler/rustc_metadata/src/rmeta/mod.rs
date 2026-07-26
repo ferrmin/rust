@@ -269,6 +269,7 @@ pub(crate) struct CrateRoot {
     lang_items_missing: LazyArray<LangItem>,
     stripped_cfg_items: LazyArray<StrippedCfgItem<DefIndex>>,
     diagnostic_items: LazyArray<(Symbol, DefIndex)>,
+    canonical_symbols: LazyArray<(Symbol, DefIndex)>,
     native_libraries: LazyArray<NativeLib>,
     foreign_modules: LazyArray<ForeignModule>,
     traits: LazyArray<DefIndex>,
@@ -412,6 +413,7 @@ define_tables! {
     constness: Table<DefIndex, hir::Constness>,
     safety: Table<DefIndex, hir::Safety>,
     defaultness: Table<DefIndex, hir::Defaultness>,
+    impl_is_fully_generic_for_reflection: Table<DefIndex, bool>,
 
 - optional:
     attributes: Table<DefIndex, LazyArray<hir::Attribute>>,

@@ -639,6 +639,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
         let diagnostic_items = stat!("diagnostic-items", || self.encode_diagnostic_items());
 
+        let canonical_symbols = stat!("canonical-symbols", || self.encode_canonical_symbols());
+
         let native_libraries = stat!("native-libs", || self.encode_native_libraries());
 
         let foreign_modules = stat!("foreign-modules", || self.encode_foreign_modules());
@@ -757,6 +759,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 stability_implications,
                 lang_items,
                 diagnostic_items,
+                canonical_symbols,
                 lang_items_missing,
                 stripped_cfg_items,
                 native_libraries,
@@ -2134,6 +2137,13 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.lazy_array(sorted.into_iter().map(|(k, v)| (*k, *v)))
     }
 
+    fn encode_canonical_symbols(&mut self) -> LazyArray<(Symbol, DefIndex)> {
+        empty_proc_macro!(self);
+        let tcx = self.tcx;
+        let canonical_symbols = &tcx.canonical_symbols(LOCAL_CRATE);
+        self.lazy_array(canonical_symbols.iter().map(|cs| (cs.symbol, cs.def_id.index)))
+    }
+
     fn encode_diagnostic_items(&mut self) -> LazyArray<(Symbol, DefIndex)> {
         empty_proc_macro!(self);
         let tcx = self.tcx;
@@ -2186,6 +2196,12 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             if of_trait {
                 let header = tcx.impl_trait_header(def_id);
                 record!(self.tables.impl_trait_header[def_id] <- header);
+
+                let impl_is_fully_generic_for_reflection =
+                    tcx.impl_is_fully_generic_for_reflection(def_id);
+                self.tables
+                    .impl_is_fully_generic_for_reflection
+                    .set(def_id.index, impl_is_fully_generic_for_reflection);
 
                 self.tables.defaultness.set(def_id.index, tcx.defaultness(def_id));
 
