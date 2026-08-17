@@ -256,9 +256,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             for note in notes {
                 diag.note(note);
             }
-        } else if let Some((_, UnresolvedImportError { note: Some(note), .. })) =
-            errors.iter().last()
-        {
+        } else if let Some((_, UnresolvedImportError { note: Some(note), .. })) = errors.last() {
             diag.note(note.clone());
         }
 
@@ -1873,7 +1871,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     self.resolutions(parent_scope.module).iter().any(|(key, name_resolution)| {
                         if key.ns == TypeNS
                             && key.ident == *ident
-                            && let Some(decl) = name_resolution.borrow().best_decl()
+                            && let Some(decl) = name_resolution.borrow(self).best_decl()
                         {
                             match decl.res() {
                                 // No disambiguation needed if the identically named item we
@@ -2876,7 +2874,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         if struct_expr.fields.is_empty() {
             return;
         }
-        let last_span = struct_expr.fields.iter().last().unwrap().span;
+        let last_span = struct_expr.fields.last().unwrap().span;
         let mut iter = struct_expr.fields.iter().peekable();
         let mut prev: Option<Span> = None;
         while let Some(field) = iter.next() {
@@ -2973,7 +2971,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         };
         let scope = match &path[..failed_segment_idx] {
             [.., prev] => {
-                if prev.ident.name == kw::PathRoot {
+                if prev.ident.name == kw::PathRoot && self.tcx.sess.edition() > Edition::Edition2015
+                {
+                    format!("the list of imported crates")
+                } else if prev.ident.name == kw::PathRoot || prev.ident.name == kw::Crate {
                     format!("the crate root")
                 } else {
                     format!("`{}`", prev.ident)
@@ -3634,7 +3635,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 let mut res = false;
                 let m = r.expect_module(parent_module);
                 if m.is_local() {
-                    for importer in m.glob_importers.borrow().iter() {
+                    for importer in m.glob_importers.borrow(r).iter() {
                         if let Some(next_parent_module) = importer.parent_scope.module.opt_def_id()
                         {
                             if next_parent_module == module

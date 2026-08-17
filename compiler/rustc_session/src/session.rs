@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::path::Component::Prefix;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -7,9 +8,7 @@ use std::{env, io};
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
 use rustc_data_structures::profiling::{SelfProfiler, SelfProfilerRef};
-use rustc_data_structures::sync::{
-    AppendOnlyVec, DynSend, DynSync, Lock, MappedReadGuard, ReadGuard, RwLock,
-};
+use rustc_data_structures::sync::{AppendOnlyVec, DynSend, DynSync, Lock};
 use rustc_data_structures::{Limit, flock};
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitter;
 use rustc_errors::codes::*;
@@ -17,7 +16,7 @@ use rustc_errors::emitter::{DynEmitter, HumanReadableErrorType, OutputTheme, std
 use rustc_errors::json::JsonEmitter;
 use rustc_errors::timings::TimingSectionHandler;
 use rustc_errors::{
-    Diag, DiagCtxt, DiagCtxtHandle, DiagMessage, Diagnostic, ErrorGuaranteed, FatalAbort,
+    Diag, DiagCtxt, DiagCtxtHandle, DiagMessage, Diagnostic, ErrorGuaranteed, FatalAbort, PResult,
     TerminalUrl,
 };
 use rustc_feature::UnstableFeatures;
@@ -341,8 +340,6 @@ pub struct Session {
     /// Input, input file path and output file path to this compilation process.
     pub io: CompilerIO,
 
-    incr_comp_session: RwLock<IncrCompSession>,
-
     /// Used by `-Z self-profile`.
     pub prof: SelfProfilerRef,
 
@@ -375,11 +372,11 @@ pub struct Session {
     /// Architecture to use for interpreting asm!.
     pub asm_arch: Option<InlineAsmArch>,
 
-    /// Set of enabled features for the current target.
-    pub target_features: FxIndexSet<Symbol>,
-
-    /// Set of enabled features for the current target, including unstable ones.
-    pub unstable_target_features: FxIndexSet<Symbol>,
+    /// Set of actually enabled features for the current target, including ones that are not
+    /// in `cfg(target_feature)` because they are unstable or internal-only.
+    /// This is used by the compiler itself when it needs to know which target features are actually
+    /// going to be enabled in the backend.
+    pub internal_target_features: FxIndexSet<Symbol>,
 
     /// The version of the rustc process, possibly including a commit hash and description.
     pub cfg_version: &'static str,
@@ -688,45 +685,6 @@ impl Session {
         }
     }
 
-    pub fn init_incr_comp_session(&self, session_dir: PathBuf, lock_file: flock::Lock) {
-        let mut incr_comp_session = self.incr_comp_session.borrow_mut();
-
-        if let IncrCompSession::NotInitialized = *incr_comp_session {
-        } else {
-            panic!("Trying to initialize IncrCompSession `{:?}`", *incr_comp_session)
-        }
-
-        *incr_comp_session =
-            IncrCompSession::Active { session_directory: session_dir, _lock_file: lock_file };
-    }
-
-    pub fn finalize_incr_comp_session(&self) {
-        let mut incr_comp_session = self.incr_comp_session.borrow_mut();
-
-        if let IncrCompSession::Active { .. } = *incr_comp_session {
-        } else {
-            panic!("trying to finalize `IncrCompSession` `{:?}`", *incr_comp_session);
-        }
-
-        // Note: this will also drop the lock file, thus unlocking the directory.
-        *incr_comp_session = IncrCompSession::FinalizedOrRemoved;
-    }
-
-    pub fn incr_comp_session_dir(&self) -> MappedReadGuard<'_, PathBuf> {
-        let incr_comp_session = self.incr_comp_session.borrow();
-        ReadGuard::map(incr_comp_session, |incr_comp_session| match incr_comp_session {
-            IncrCompSession::NotInitialized | IncrCompSession::FinalizedOrRemoved => panic!(
-                "trying to get session directory from `IncrCompSession`: {:?}",
-                incr_comp_session,
-            ),
-            IncrCompSession::Active { session_directory, .. } => session_directory,
-        })
-    }
-
-    pub fn incr_comp_session_dir_opt(&self) -> Option<MappedReadGuard<'_, PathBuf>> {
-        self.opts.incremental.as_ref().map(|_| self.incr_comp_session_dir())
-    }
-
     /// Is this edition 2015?
     pub fn is_rust_2015(&self) -> bool {
         self.edition().is_rust_2015()
@@ -813,6 +771,41 @@ impl Session {
         match self.lint_store {
             Some(ref lint_store) => lint_store.lint_groups_iter(),
             None => Box::new(std::iter::empty()),
+        }
+    }
+
+    /// Resolves a `path` mentioned inside Rust code, returning an absolute path.
+    ///
+    /// This unifies the logic used for resolving `include_*!` and debugger visualizers.
+    pub fn resolve_path(&self, path: impl Into<PathBuf>, span: Span) -> PResult<'_, PathBuf> {
+        let path = path.into();
+
+        // Relative paths are resolved relative to the file in which they are found
+        // after macro expansion (that is, they are unhygienic).
+        if !path.is_absolute() {
+            let callsite = span.source_callsite();
+            let source_map = self.source_map();
+            let Some(mut base_path) = source_map.span_to_filename(callsite).into_local_path()
+            else {
+                return Err(self.dcx().create_err(diagnostics::ResolveRelativePath {
+                    span,
+                    path: source_map
+                        .filename_for_diagnostics(&source_map.span_to_filename(callsite))
+                        .to_string(),
+                }));
+            };
+            base_path.pop();
+            base_path.push(path);
+            Ok(base_path)
+        } else {
+            // This ensures that Windows verbatim paths are fixed if mixed path separators are used,
+            // which can happen when `concat!` is used to join paths.
+            match path.components().next() {
+                Some(Prefix(prefix)) if prefix.kind().is_verbatim() => {
+                    Ok(path.components().collect())
+                }
+                _ => Ok(path),
+            }
         }
     }
 }
@@ -1376,7 +1369,6 @@ pub fn build_session(
         check_config: CheckCfg::default(),
         proc_macro_quoted_spans: Default::default(),
         io,
-        incr_comp_session: RwLock::new(IncrCompSession::NotInitialized),
         prof,
         timings,
         code_stats: Default::default(),
@@ -1385,8 +1377,7 @@ pub fn build_session(
         ctfe_backtrace,
         miri_unleashed_features: Lock::new(Default::default()),
         asm_arch,
-        target_features: Default::default(),
-        unstable_target_features: Default::default(),
+        internal_target_features: Default::default(),
         cfg_version,
         using_internal_features,
         env_depinfo: Default::default(),
@@ -1715,20 +1706,15 @@ fn validate_commandline_args_with_session_available(sess: &Session) {
 }
 
 /// Holds data on the current incremental compilation session, if there is one.
-#[derive(Debug)]
-enum IncrCompSession {
-    /// This is the state the session will be in until the incr. comp. dir is
-    /// needed.
-    NotInitialized,
-    /// This is the state during which the session directory is private and can
-    /// be modified. `_lock_file` is never directly used, but its presence
+pub struct IncrCompSession {
+    /// The directory containing all cached data. Cached data from a previous
+    /// session can be read out of it and new data for the current session will
+    /// be written into it.
+    pub session_directory: PathBuf,
+    /// `_lock_file` is never directly used, but its presence
     /// alone has an effect, because the file will unlock when the session is
     /// dropped.
-    Active { session_directory: PathBuf, _lock_file: flock::Lock },
-    /// This is the state after the session directory has been finalized or
-    /// removed after errors. In this state, the contents of the directory must
-    /// not be modified any more.
-    FinalizedOrRemoved,
+    pub _lock_file: flock::Lock,
 }
 
 /// A wrapper around an [`DiagCtxt`] that is used for early error emissions.
