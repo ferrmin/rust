@@ -13,7 +13,7 @@ use rustc_middle::traits::ObligationCauseCode;
 use rustc_middle::ty::error::TypeError;
 use rustc_middle::ty::print::RegionHighlightMode;
 use rustc_middle::ty::{
-    self, IsSuggestable, Region, RegionExt, Ty, TyCtxt, TypeVisitableExt as _, Upcast as _,
+    self, IsSuggestable, Region, Ty, TyCtxt, TypeVisitableExt as _, Upcast as _,
 };
 use rustc_span::{BytePos, ErrorGuaranteed, Span, Symbol, kw, sym};
 use tracing::{debug, instrument};
@@ -297,7 +297,7 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             SubregionOrigin::SolverRegionConstraint(span) => {
                 RegionOriginNote::Plain {
                     span,
-                    msg: msg!("this diagnostic is currently WIP while -Zassumptions-on-binders is incomplete"),
+                    msg: msg!("...so that a higher-ranked lifetime bound can be satisfied"),
                 }
                 .add_to_diag(err);
             }
@@ -569,14 +569,9 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                     notes: instantiated.into_iter().chain(must_outlive).collect(),
                 })
             }
-            SubregionOrigin::SolverRegionConstraint(span) => {
-                let mut d = self.dcx().struct_span_err(
-                    span,
-                    "unsatisfied lifetime constraint from -Zassumptions-on-binders :3",
-                );
-                d.note("meoow :c");
-                d
-            }
+            SubregionOrigin::SolverRegionConstraint(span) => self
+                .dcx()
+                .struct_span_err(span, "higher-ranked lifetime bound could not be satisfied"),
         };
         if sub.is_error() || sup.is_error() {
             err.downgrade_to_delayed_bug();

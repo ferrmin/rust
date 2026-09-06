@@ -15,8 +15,7 @@ use rustc_middle::bug;
 use rustc_middle::hir::place::PlaceBase;
 use rustc_middle::mir::{AnnotationSource, ConstraintCategory, ReturnConstraint};
 use rustc_middle::ty::{
-    self, GenericArgs, Region, RegionExt, RegionVid, Ty, TyCtxt, TypeFoldable, TypeVisitor,
-    fold_regions,
+    self, GenericArgs, Region, RegionVid, Ty, TyCtxt, TypeFoldable, TypeVisitor, fold_regions,
 };
 use rustc_span::{Ident, Span, kw};
 use rustc_trait_selection::error_reporting::InferCtxtErrorExt;
@@ -478,14 +477,9 @@ impl<'diag, 'tcx> MirBorrowckCtxt<'_, 'diag, 'tcx> {
         let errci = ErrorConstraintInfo { fr, outlived_fr, category, span };
 
         let mut diag = match (category, fr_is_local, outlived_fr_is_local) {
-            (ConstraintCategory::SolverRegionConstraint(span), _, _) => {
-                let mut d = self.dcx().struct_span_err(
-                    span,
-                    "unsatisfied lifetime constraint from -Zassumptions-on-binders :3",
-                );
-                d.note("meoow :c");
-                d
-            }
+            (ConstraintCategory::SolverRegionConstraint(span), _, _) => self
+                .dcx()
+                .struct_span_err(span, "higher-ranked lifetime bound could not be satisfied"),
             (ConstraintCategory::Return(kind), true, false)
                 if self.regioncx.is_closure_fn_mut(fr) =>
             {

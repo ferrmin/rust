@@ -20,11 +20,13 @@ use rustc_middle::ty::layout::{
 };
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_middle::{bug, span_bug};
+use rustc_sanitizers::ignorelist::{SanitizerIgnoreList, typename_for_ignore_list};
 use rustc_session::config::{
-    BranchProtection, CFGuard, CFProtection, CrateType, DebugInfo, FunctionReturn, PAuthKey, PacRet,
+    BranchProtection, CFGuard, CFProtection, DebugInfo, FunctionReturn, PAuthKey, PacRet,
 };
 use rustc_session::{PointerAuthSchema, Session};
 use rustc_span::{DUMMY_SP, Span, Spanned, Symbol, sym};
+use rustc_structures::CrateType;
 use rustc_target::spec::{
     Arch, CfgAbi, Env, FramePointer, HasTargetSpec, Os, RelocModel, SmallDataThresholdSupport,
     Target, TlsModel,
@@ -132,6 +134,7 @@ pub(crate) struct FullCx<'ll, 'tcx> {
     /// Extra per-CGU codegen state needed when coverage instrumentation is enabled.
     pub coverage_cx: Option<coverageinfo::CguCoverageContext<'ll, 'tcx>>,
     pub dbg_cx: Option<debuginfo::CodegenUnitDebugContext<'ll, 'tcx>>,
+    pub sanitizer_ignorelist: Option<SanitizerIgnoreList>,
 
     eh_personality: Cell<Option<&'ll Value>>,
     pub rust_try_fn: Cell<Option<(&'ll Type, &'ll Value)>>,
@@ -280,6 +283,12 @@ pub(crate) unsafe fn create_module<'ll>(
     // See https://reviews.llvm.org/D52322 and https://reviews.llvm.org/D52323.
     unsafe {
         llvm::LLVMRustSetModuleCodeModel(llmod, to_llvm_code_model(sess.code_model()));
+    }
+
+    if let Some(large_data_threshold) = sess.opts.unstable_opts.large_data_threshold {
+        unsafe {
+            llvm::LLVMRustSetModuleLargeDataThreshold(llmod, large_data_threshold);
+        }
     }
 
     // If skipping the PLT is enabled, we need to add some module metadata
@@ -563,6 +572,17 @@ pub(crate) unsafe fn create_module<'ll>(
         );
     }
 
+    if llvm_version >= (24, 0, 0)
+        && let Some(floatabi) = sess.target.llvm_floatabi
+    {
+        llvm::add_module_flag_str(
+            llmod,
+            llvm::ModuleFlagMergeBehavior::Error,
+            "float-abi",
+            floatabi.desc(),
+        );
+    }
+
     // Add module flags specified via -Z llvm_module_flag
     for (key, value, merge_behavior) in &sess.opts.unstable_opts.llvm_module_flag {
         let merge_behavior = match merge_behavior.as_str() {
@@ -662,6 +682,24 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
             None
         };
 
+        // FIXME: This parses the ignorelist files for each CGU, which adds a performance overhead.
+        // Clang parses it once per frontend invocation. LLVM's `SpecialCaseList::inSection`
+        // mutates an internal `LazyInit` cache and is not thread-safe. We either need to wrap
+        // the queries in a lock or wait for LLVM to expose a thread-safe way to query it.
+        let sanitizer_ignorelist = if !tcx.sess.opts.unstable_opts.sanitizer_ignorelist.is_empty() {
+            for path in &tcx.sess.opts.unstable_opts.sanitizer_ignorelist {
+                let _ = tcx.sess.source_map().load_file(std::path::Path::new(path));
+            }
+            match SanitizerIgnoreList::new(&tcx.sess.opts.unstable_opts.sanitizer_ignorelist) {
+                Ok(list) => Some(list),
+                Err(err) => {
+                    tcx.dcx().fatal(format!("failed to parse sanitizer ignorelist: {}", err));
+                }
+            }
+        } else {
+            None
+        };
+
         GenericCx(
             FullCx {
                 tcx,
@@ -681,6 +719,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
                 scalar_lltypes: Default::default(),
                 coverage_cx,
                 dbg_cx,
+                sanitizer_ignorelist,
                 eh_personality: Cell::new(None),
                 rust_try_fn: Cell::new(None),
                 intrinsics: Default::default(),
@@ -819,6 +858,17 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
             "Objective-C Class Properties",
             1 << 6,
         );
+    }
+
+    pub(crate) fn is_sanitizer_type_ignored(
+        &self,
+        sanitizer: &std::ffi::CStr,
+        fn_abi: &rustc_target::callconv::FnAbi<'tcx, Ty<'tcx>>,
+    ) -> bool {
+        self.sanitizer_ignorelist.as_ref().is_some_and(|ignorelist| {
+            let type_name = typename_for_ignore_list(self.tcx, fn_abi);
+            ignorelist.contains_prefix(sanitizer, c"type", &type_name)
+        })
     }
 }
 impl<'ll> SimpleCx<'ll> {

@@ -15,7 +15,7 @@ use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{
     AppendOnlyIndexVec, DynSend, DynSync, FreezeLock, WorkerLocal, par_fns,
 };
-use rustc_data_structures::{Limit, thousands};
+use rustc_data_structures::thousands;
 use rustc_errors::timings::TimingSection;
 use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};
 use rustc_expand::base::{ExtCtxt, LintStoreExpand};
@@ -30,13 +30,14 @@ use rustc_lint::{BufferedEarlyLint, EarlyCheckNode, LintStore, unerased_lint_sto
 use rustc_metadata::EncodedMetadata;
 use rustc_metadata::creader::CStore;
 use rustc_middle::arena::Arena;
+use rustc_middle::middle::resolve::{ResolverAstLowering, ResolverGlobalCtxt};
 use rustc_middle::ty::{self, RegisteredTools, TyCtxt};
 use rustc_middle::util::Providers;
 use rustc_parse::lexer::StripTokens;
 use rustc_parse::{new_parser_from_file, new_parser_from_source_str, unwrap_or_emit_fatal};
 use rustc_passes::{abi_test, input_stats, layout_test};
 use rustc_resolve::{Resolver, ResolverOutputs};
-use rustc_session::config::{CrateType, Input, OutFileName, OutputFilenames, OutputType};
+use rustc_session::config::{Input, OutFileName, OutputFilenames, OutputType};
 use rustc_session::diagnostics::feature_err;
 use rustc_session::output::{filename_for_input, invalid_output_for_target};
 use rustc_session::search_paths::PathKind;
@@ -44,6 +45,7 @@ use rustc_session::{IncrCompSession, Session};
 use rustc_span::{
     DUMMY_SP, ErrorGuaranteed, ExpnKind, SourceFileHash, SourceFileHashAlgorithm, Span, Symbol, sym,
 };
+use rustc_structures::{CrateType, Limit};
 use rustc_trait_selection::{solve, traits};
 use tracing::{info, instrument};
 
@@ -490,14 +492,7 @@ fn early_lint_checks(tcx: TyCtxt<'_>, (): ()) {
 fn env_var_os<'tcx>(tcx: TyCtxt<'tcx>, key: &'tcx OsStr) -> Option<&'tcx OsStr> {
     let value = env::var_os(key);
 
-    let value_tcx = value.as_ref().map(|value| {
-        let encoded_bytes = tcx.arena.alloc_slice(value.as_encoded_bytes());
-        debug_assert_eq!(value.as_encoded_bytes(), encoded_bytes);
-        // SAFETY: The bytes came from `as_encoded_bytes`, and we assume that
-        // `alloc_slice` is implemented correctly, and passes the same bytes
-        // back (debug asserted above).
-        unsafe { OsStr::from_encoded_bytes_unchecked(encoded_bytes) }
-    });
+    let value_tcx = value.as_ref().map(|value| tcx.arena.alloc_os_str(value));
 
     // Also add the variable to Cargo's dependency tracking
     //
@@ -660,7 +655,7 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
                 checksum_hash_algo,
             ));
         }
-        if let Some(ref profile_sample) = sess.opts.unstable_opts.profile_sample_use {
+        if let Some(ref profile_sample) = sess.opts.cg.profile_sample_use {
             files.extend(hash_iter_files(
                 iter::once(normalize_path(profile_sample.as_path().to_path_buf())),
                 checksum_hash_algo,
@@ -791,11 +786,7 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
 fn resolver_for_lowering_raw<'tcx>(
     tcx: TyCtxt<'tcx>,
     (): (),
-) -> (
-    &'tcx Steal<ty::ResolverAstLowering<'tcx>>,
-    &'tcx Steal<ast::Crate>,
-    &'tcx ty::ResolverGlobalCtxt,
-) {
+) -> (&'tcx Steal<ResolverAstLowering<'tcx>>, &'tcx Steal<ast::Crate>, &'tcx ResolverGlobalCtxt) {
     let arenas = WorkerLocal::new(|_| Resolver::arenas());
     let _ = tcx.registered_attr_tools(()); // Uses `crate_for_resolver`.
     let _ = tcx.registered_lint_tools(()); // Uses `crate_for_resolver`.
@@ -875,7 +866,7 @@ pub fn write_dep_info(tcx: TyCtxt<'_>) {
 }
 
 pub fn write_interface<'tcx>(tcx: TyCtxt<'tcx>) {
-    if !tcx.crate_types().contains(&rustc_session::config::CrateType::Sdylib) {
+    if !tcx.crate_types().contains(&rustc_structures::CrateType::Sdylib) {
         return;
     }
     let _timer = tcx.sess.timer("write_interface");
@@ -906,7 +897,7 @@ pub static DEFAULT_QUERY_PROVIDERS: LazyLock<Providers> = LazyLock::new(|| {
     providers.queries.proc_macro_decls_static = |tcx, _| tcx.hir_crate_items(()).proc_macro_decls();
     rustc_ast_lowering::provide(&mut providers.queries);
     limits::provide(&mut providers.queries);
-    rustc_expand::provide(&mut providers.queries);
+    rustc_expand_queries::provide(&mut providers.queries);
     rustc_const_eval::provide(providers);
     rustc_middle::hir::provide(&mut providers.queries);
     rustc_borrowck::provide(&mut providers.queries);
@@ -1011,8 +1002,8 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
         untracked,
         incr_comp_session.as_ref(),
         dep_graph,
-        rustc_query_impl::make_dep_kind_vtables(&arena),
         rustc_query_impl::query_system(
+            &arena,
             providers.queries,
             providers.extern_queries,
             query_result_on_disk_cache,

@@ -154,6 +154,10 @@ pub enum TypingMode<I: Interner, S: TypingModeErasedStatus = MayBeErased> {
     /// we bail out, setting a field on `EvalCtxt` that indicates the canonicalization must be
     /// rerun in the original typing mode.
     ///
+    /// Specifically, we always reveal auto traits for rigid aliases and thus we don't allow
+    /// incorrectly marked rigid local opaques. We ensure this by immediately bailing out
+    /// when normalizing local opaques.
+    ///
     /// `TypingMode::Coherence` is not replaced by this and is always kept as-is.
     ErasedNotCoherence(S),
 }
@@ -362,6 +366,22 @@ impl<I: Interner> From<TypingMode<I, CantBeErased>> for TypingMode<I, MayBeErase
     }
 }
 
+/// `InferCtxtLike` is one of the two traits abstracting over the [InferCtxt][inferctxt-doc], which
+/// had to be split due to coherence reasons:
+/// - `InferCtxtLike`] contains the parts that have to live in `rustc_infer`, and thus aren't only
+///   about trait-solving. It is implemented [directly on `InferCtxt`][inferctxtlike-impl-doc],
+/// - [SolverDelegate][solverdelegate-doc] contains the parts depending on trait-solving logic, to
+///   provide functionality in `rustc_trait_selection`, and is implemented by a [simple wrapper over
+///   `InferCtxt`][inferctxt-wrapper-doc] there.
+///
+/// More information can also be found in the dedicated chapter in the dev-guide, in [this
+/// section][dev-guide].
+///
+/// [inferctxt-doc]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_infer/infer/struct.InferCtxt.html
+/// [inferctxtlike-impl-doc]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_infer/infer/struct.InferCtxt.html#impl-InferCtxtLike-for-InferCtxt%3C'tcx%3E
+/// [solverdelegate-doc]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_next_trait_solver/delegate/trait.SolverDelegate.html
+/// [inferctxt-wrapper-doc]: https://doc.rust-lang.org/nightly/nightly-rustc/rustc_trait_selection/solve/delegate/struct.SolverDelegate.html
+/// [dev-guide]: https://rustc-dev-guide.rust-lang.org/solve/sharing-crates-with-rust-analyzer.html#trait-inferctxtlike-and-trait-solverdelegate
 #[cfg_attr(feature = "nightly", rustc_diagnostic_item = "type_ir_infer_ctxt_like")]
 pub trait InferCtxtLike: Sized {
     type Interner: Interner;
@@ -399,6 +419,7 @@ pub trait InferCtxtLike: Sized {
     fn overwrite_solver_region_constraint(
         &self,
         constraint: crate::region_constraint::RegionConstraint<Self::Interner>,
+        span: <Self::Interner as Interner>::Span,
     );
 
     fn universe_of_ty(&self, ty: ty::TyVid) -> Option<ty::UniverseIndex>;
@@ -520,6 +541,7 @@ pub trait InferCtxtLike: Sized {
     fn register_solver_region_constraint(
         &self,
         c: crate::region_constraint::RegionConstraint<Self::Interner>,
+        span: <Self::Interner as Interner>::Span,
     );
 
     fn register_ty_outlives(
@@ -571,7 +593,7 @@ where
     Infcx: InferCtxtLike<Interner = I>,
 {
     // Iterate through all goals in param_env to find the one that has the same symbol.
-    for clause in param_env.caller_bounds().iter() {
+    for clause in param_env.caller_bounds() {
         if let ty::ClauseKind::UnstableFeature(sym) = clause.kind().skip_binder() {
             if sym == symbol {
                 return true;

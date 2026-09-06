@@ -22,7 +22,6 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-pub use config::*;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer};
 use serde_derive::Deserialize;
@@ -32,6 +31,7 @@ pub use toml::change_id::ChangeId;
 pub use toml::rust::BootstrapOverrideLld;
 pub use toml::target::Target;
 
+pub(crate) use self::config::*;
 use crate::utils::helpers;
 
 pub(crate) trait Merge {
@@ -373,17 +373,22 @@ pub enum GccCiMode {
 pub enum LlvmCiMode {
     /// Build LLVM from the local `src/llvm-project` submodule.
     BuildLocally,
+    /// Try to download LLVM from CI if the `src/llvm-project` submodule
+    /// (and some other files that affect LLVM's build) are not modified in git.
+    DownloadIfUnchanged,
     /// Try to download LLVM from CI.
     /// If it is not available on CI, it will be built locally instead.
     #[default]
-    DownloadFromCi,
+    Download,
 }
 
 impl LlvmCiMode {
-    pub fn download_from_ci(&self) -> bool {
+    /// Return true if the user has requested LLVM to be downloaded from CI.
+    /// **Note:** this does not mean that it will be actually downloaded.
+    pub fn requests_download_from_ci(&self) -> bool {
         match self {
             LlvmCiMode::BuildLocally => false,
-            LlvmCiMode::DownloadFromCi => true,
+            LlvmCiMode::Download | LlvmCiMode::DownloadIfUnchanged => true,
         }
     }
 }

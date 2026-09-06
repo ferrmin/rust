@@ -6,7 +6,8 @@ use rustc_errors::{
     Diag, DiagCtxtHandle, DiagSymbolList, Diagnostic, EmissionGuarantee, Level, MultiSpan, msg,
 };
 use rustc_macros::{Diagnostic, Subdiagnostic};
-use rustc_middle::ty::{MainDefinition, Ty};
+use rustc_middle::middle::resolve::MainDefinition;
+use rustc_middle::ty::Ty;
 use rustc_span::{DUMMY_SP, Ident, Span, Symbol};
 
 use crate::check_attr::ProcMacroKind;
@@ -281,17 +282,6 @@ pub(crate) struct NonExportedMacroInvalidAttrs {
 pub(crate) struct InvalidMayDangle {
     #[primary_span]
     pub attr_span: Span,
-}
-
-#[derive(Diagnostic)]
-#[diag("this `#[deprecated]` annotation has no effect")]
-pub(crate) struct DeprecatedAnnotationHasNoEffect {
-    #[suggestion(
-        "remove the unnecessary deprecation attribute",
-        applicability = "machine-applicable",
-        code = ""
-    )]
-    pub span: Span,
 }
 
 #[derive(Diagnostic)]
@@ -617,6 +607,11 @@ pub(crate) struct TransparentIncompatible {
     pub hint_spans: Vec<Span>,
     pub target: String,
 }
+
+#[derive(Diagnostic)]
+#[diag("`#[repr(..)]` attribute is specified more than once")]
+#[note("for consistency, only specify the representation once")]
+pub(crate) struct RepeatedRepr;
 
 #[derive(Diagnostic)]
 #[diag("deprecated attribute must be paired with either stable or unstable attribute", code = E0549)]
@@ -1169,4 +1164,21 @@ pub(crate) struct StaticMutLinkage {
 pub(crate) struct ConstFnLinkage {
     #[primary_span]
     pub span: Span,
+}
+
+#[derive(Diagnostic)]
+#[diag("use of deprecated import through accidentally stabilized module `{$module}`")]
+pub(crate) struct RustcAtumSuggestion {
+    #[primary_span]
+    pub import_span: Span,
+    pub message: Symbol,
+    pub suggestion: Symbol,
+    pub module: Ident,
+    #[suggestion(
+        "{$message}",
+        code = "{suggestion}",
+        style = "verbose",
+        applicability = "machine-applicable"
+    )]
+    pub unstable_mod_span: Span,
 }

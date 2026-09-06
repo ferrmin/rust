@@ -69,6 +69,10 @@ fn parsed_attrs(id: HirId, tcx: TyCtxt<'_>) -> ThinVec<AttributeKind> {
 }
 
 impl<'tcx> ThirBuildCx<'tcx> {
+    pub(crate) fn mirror_exprs(&mut self, exprs: &'tcx [hir::Expr<'tcx>]) -> Box<[ExprId]> {
+        exprs.iter().map(|expr| self.mirror_expr(expr)).collect()
+    }
+
     /// Create a THIR expression for the given HIR expression. This expands all
     /// adjustments and directly adds the type information from the
     /// `typeck_results`. See the [dev-guide] for more details.
@@ -77,16 +81,8 @@ impl<'tcx> ThirBuildCx<'tcx> {
     /// "reversed".)
     ///
     /// [dev-guide]: https://rustc-dev-guide.rust-lang.org/thir.html
-    pub(crate) fn mirror_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) -> ExprId {
-        self.mirror_expr_inner(expr)
-    }
-
-    pub(crate) fn mirror_exprs(&mut self, exprs: &'tcx [hir::Expr<'tcx>]) -> Box<[ExprId]> {
-        exprs.iter().map(|expr| self.mirror_expr_inner(expr)).collect()
-    }
-
     #[instrument(level = "trace", skip(self, hir_expr))]
-    pub(super) fn mirror_expr_inner(&mut self, hir_expr: &'tcx hir::Expr<'tcx>) -> ExprId {
+    pub(crate) fn mirror_expr(&mut self, hir_expr: &'tcx hir::Expr<'tcx>) -> ExprId {
         let expr_scope =
             region::Scope { local_id: hir_expr.hir_id.local_id, data: region::ScopeData::Node };
 
@@ -316,7 +312,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
         // using a coercion (or is a no-op).
         if self.typeck_results.is_coercion_cast(source.hir_id) {
             // Convert the lexpr to a vexpr.
-            ExprKind::Use { source: self.mirror_expr(source) }
+            ExprKind::ValueExpr { source: self.mirror_expr(source) }
         } else if self.typeck_results.expr_ty(source).is_ref() {
             // Special cased so that we can type check that the element
             // type of the source matches the pointed to type of the
@@ -1182,7 +1178,9 @@ impl<'tcx> ThirBuildCx<'tcx> {
                 ExprKind::WrapUnsafeBinder { source: mirrored }
             }
 
-            hir::ExprKind::DropTemps(source) => ExprKind::Use { source: self.mirror_expr(source) },
+            hir::ExprKind::DropTemps(source) => {
+                ExprKind::ValueExpr { source: self.mirror_expr(source) }
+            }
             hir::ExprKind::Array(fields) => ExprKind::Array { fields: self.mirror_exprs(fields) },
             hir::ExprKind::Tup(fields) => ExprKind::Tuple { fields: self.mirror_exprs(fields) },
 
@@ -1609,7 +1607,7 @@ impl<'tcx> ThirBuildCx<'tcx> {
                     name: field,
                 },
                 HirProjectionKind::OpaqueCast => {
-                    ExprKind::Use { source: self.thir.exprs.push(captured_place_expr) }
+                    ExprKind::ValueExpr { source: self.thir.exprs.push(captured_place_expr) }
                 }
                 HirProjectionKind::UnwrapUnsafeBinder => ExprKind::PlaceUnwrapUnsafeBinder {
                     source: self.thir.exprs.push(captured_place_expr),

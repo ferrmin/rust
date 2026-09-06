@@ -1194,6 +1194,12 @@ pub(crate) struct XcrunSdkPathWarning {
 pub(crate) struct Aarch64SoftfloatNeon;
 
 #[derive(Diagnostic)]
+#[diag(
+    "enabling the `sse` target feature on the current target is unsupported due to LLVM backend issues"
+)]
+pub(crate) struct X86SoftfloatSse;
+
+#[derive(Diagnostic)]
 #[diag("ignoring feature with missing prefix in `-Ctarget-feature`: `{$feature}`")]
 #[note("features must begin with a `+` to enable or `-` to disable it")]
 pub(crate) struct UnknownCTargetFeaturePrefix<'a> {
@@ -1213,6 +1219,10 @@ pub(crate) enum PossibleFeature<'a> {
 #[note(
     "it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future"
 )]
+#[note(
+    "this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!"
+)]
+#[note("for more information, see issue #162235 <https://github.com/rust-lang/rust/issues/162235>")]
 pub(crate) struct UnknownCTargetFeature<'a> {
     pub feature: &'a str,
     #[subdiagnostic]
@@ -1222,6 +1232,10 @@ pub(crate) struct UnknownCTargetFeature<'a> {
 #[derive(Diagnostic)]
 #[diag("unstable feature specified for `-Ctarget-feature`: `{$feature}`")]
 #[note("{$note}; its behavior can change in the future")]
+#[note(
+    "this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!"
+)]
+#[note("for more information, see issue #162235 <https://github.com/rust-lang/rust/issues/162235>")]
 pub(crate) struct UnstableCTargetFeature<'a> {
     pub feature: &'a str,
     pub note: &'a str,
@@ -1237,7 +1251,7 @@ pub(crate) struct InternalOnlyCTargetFeature<'a> {
         "this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!"
     )]
     #[note(
-        "for more information, see issue #116344 <https://github.com/rust-lang/rust/issues/116344>"
+        "for more information, see issue #162235 <https://github.com/rust-lang/rust/issues/162235>"
     )]
     pub future_compat_note: bool,
 }

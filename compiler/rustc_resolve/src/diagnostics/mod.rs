@@ -288,19 +288,33 @@ pub(crate) struct AttemptToUseNonConstantValueInConstant<'a> {
 }
 
 #[derive(Subdiagnostic)]
-#[multipart_suggestion(
-    "consider using `{$suggestion}` instead of `{$current}`",
-    style = "verbose",
-    applicability = "has-placeholders"
-)]
-pub(crate) struct AttemptToUseNonConstantValueInConstantWithSuggestion<'a> {
-    // #[primary_span]
-    #[suggestion_part(code = "{suggestion} ")]
-    pub(crate) span: Span,
-    pub(crate) suggestion: &'a str,
-    #[suggestion_part(code = ": /* Type */")]
-    pub(crate) type_span: Option<Span>,
-    pub(crate) current: &'a str,
+pub(crate) enum AttemptToUseNonConstantValueInConstantWithSuggestion<'a> {
+    #[multipart_suggestion(
+        "consider using `{$suggestion}` instead of `{$current}`",
+        style = "verbose",
+        applicability = "has-placeholders"
+    )]
+    Placeholder {
+        #[suggestion_part(code = "{suggestion} ")]
+        span: Span,
+        suggestion: &'a str,
+        #[suggestion_part(code = ": /* Type */")]
+        type_span: Option<Span>,
+        current: &'a str,
+    },
+    #[multipart_suggestion(
+        "consider using `{$suggestion}` instead of `{$current}`",
+        style = "verbose",
+        applicability = "machine-applicable"
+    )]
+    Usize {
+        #[suggestion_part(code = "{suggestion} ")]
+        span: Span,
+        suggestion: &'a str,
+        #[suggestion_part(code = ": usize")]
+        type_span: Option<Span>,
+        current: &'a str,
+    },
 }
 
 #[derive(Subdiagnostic)]
@@ -386,6 +400,10 @@ pub(crate) struct SelfInGenericParamDefault {
 pub(crate) struct SelfInConstGenericTy {
     #[primary_span]
     pub(crate) span: Span,
+    #[help(
+        "add `#![feature(min_adt_const_params)]` to the crate attributes to enable `Self` as a const parameter type"
+    )]
+    pub(crate) enable_feature: bool,
 }
 
 #[derive(Diagnostic)]
@@ -1219,14 +1237,14 @@ pub(crate) struct CannotFindBuiltinMacroWithName {
 
 #[derive(Subdiagnostic)]
 pub(crate) enum DefinedHere {
-    #[label("similarly named {$candidate_descr} `{$candidate}` defined here")]
+    #[note("similarly named {$candidate_descr} `{$candidate}` defined here")]
     SimilarlyNamed {
         #[primary_span]
         span: Span,
         candidate_descr: &'static str,
         candidate: Symbol,
     },
-    #[label("{$candidate_descr} `{$candidate}` defined here")]
+    #[note("{$candidate_descr} `{$candidate}` defined here")]
     SingleItem {
         #[primary_span]
         span: Span,

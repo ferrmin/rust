@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use rustc_ast::{self as ast, *};
 use rustc_errors::StashKey;
-use rustc_hir::def::{DefKind, PartialRes, PerNS, Res};
+use rustc_hir::def::{DefKind, PerNS, Res};
 use rustc_hir::def_id::DefId;
 use rustc_hir::{self as hir, GenericArg};
+use rustc_middle::middle::resolve::PartialRes;
 use rustc_middle::{span_bug, ty};
 use rustc_session::diagnostics::add_feature_diagnostics;
 use rustc_span::{BytePos, DUMMY_SP, DesugaringKind, Ident, Span, Symbol, sym};
@@ -338,12 +339,14 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         } else {
                             None
                         };
-                        self.dcx().emit_err(GenericTypeWithParentheses { span: data.span, sub });
+                        let guar = self
+                            .dcx()
+                            .emit_err(GenericTypeWithParentheses { span: data.span, sub });
                         (
                             self.lower_angle_bracketed_parameter_data(
                                 &data.as_angle_bracketed_args(),
                                 param_mode,
-                                itctx,
+                                ImplTraitContext::AlreadyErrored(guar),
                             )
                             .0,
                             false,
@@ -423,7 +426,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         segment_ident_span: Span,
         generic_args: &mut GenericArgsCtor<'hir>,
     ) {
-        let (start, end) = match self.owner.get_lifetime_res(segment_id) {
+        let (start, end) = match self.curr_owner.owner.get_lifetime_res(segment_id) {
             Some(LifetimeRes::ElidedAnchor { start, end }) => (start, end),
             None => return,
             Some(res) => {

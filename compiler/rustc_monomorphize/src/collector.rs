@@ -208,7 +208,6 @@
 use std::cell::OnceCell;
 use std::ops::ControlFlow;
 
-use rustc_data_structures::Limit;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::sync::{Lock, par_for_each_in};
 use rustc_data_structures::unord::{UnordMap, UnordSet};
@@ -233,6 +232,7 @@ use rustc_middle::util::Providers;
 use rustc_middle::{bug, span_bug};
 use rustc_session::config::{DebugInfo, EntryFnType, Offload};
 use rustc_span::{DUMMY_SP, Span, Spanned, Symbol, dummy_spanned, respan};
+use rustc_structures::Limit;
 use tracing::{debug, instrument, trace};
 
 use crate::diagnostics::{
@@ -1064,7 +1064,8 @@ fn visit_instance_use<'tcx>(
         | ty::InstanceKind::Shim(ty::ShimKind::ConstructCoroutineInClosure { .. })
         | ty::InstanceKind::Shim(ty::ShimKind::FnPtr(..))
         | ty::InstanceKind::Shim(ty::ShimKind::Clone(..))
-        | ty::InstanceKind::Shim(ty::ShimKind::FnPtrAddr(..)) => {
+        | ty::InstanceKind::Shim(ty::ShimKind::FnPtrAsPtr(..))
+        | ty::InstanceKind::Shim(ty::ShimKind::FnPtrFromPtr(..)) => {
             output.push(create_fn_mono_item(tcx, instance, source));
         }
     }
@@ -1662,7 +1663,7 @@ impl<'v> RootCollector<'_, 'v> {
                     let def_id = id.owner_id.to_def_id();
                     // Type Consts don't have bodies to evaluate
                     // nor do they make sense as a static.
-                    if self.tcx.is_type_const(def_id) {
+                    if self.tcx.const_of_item(def_id).is_some() {
                         // FIXME(mgca): Is this actually what we want? We may want to
                         // normalize to a ValTree then convert to a const allocation and
                         // collect that?
