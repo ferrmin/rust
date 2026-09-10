@@ -15,7 +15,7 @@ use rustc_errors::{
 use rustc_hir::attrs::lang_items::{self, LangItem};
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_hir::def_id::DefId;
-use rustc_hir::intravisit::{Visitor, VisitorExt};
+use rustc_hir::intravisit::Visitor;
 use rustc_hir::{
     self as hir, AmbigArg, CoroutineDesugaring, CoroutineKind, CoroutineSource, Expr, HirId, Node,
     expr_needs_parens,
@@ -779,6 +779,17 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
             {
                 if span.in_external_macro(self.tcx.sess.source_map()) {
                     return false;
+                }
+
+                // For a shared reference, prefer removing the outer `&` over suggesting
+                // `&*reference`. Keep the reborrow for `&mut T` and smart pointers.
+                if is_under_ref.is_some()
+                    && steps == 1
+                    && matches!(base_ty.kind(), ty::Ref(_, _, hir::Mutability::Not))
+                    && !expr.span.from_expansion()
+                    && self.suggest_remove_reference(obligation, err, real_trait_pred)
+                {
+                    return true;
                 }
                 let derefs = "*".repeat(steps);
                 let msg = "consider dereferencing here";
