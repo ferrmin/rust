@@ -30,7 +30,7 @@ use rustc_span::{
     BytePos, DUMMY_SP, DesugaringKind, ErrorGuaranteed, Ident, LocalExpnId, Span, Spanned, Symbol,
     kw, sym,
 };
-use rustc_target::asm::InlineAsmRegOrRegClass;
+use rustc_target::asm;
 use tracing::debug;
 
 use crate::def::{CtorKind, DefKind, MacroKinds, PerNS, Res};
@@ -3093,7 +3093,7 @@ pub enum ImplItemKind<'hir> {
 /// * the `G<Ty> = Ty` in `Trait<G<Ty> = Ty>`
 /// * the `A: Bound` in `Trait<A: Bound>`
 /// * the `RetTy` in `Trait(ArgTy, ArgTy) -> RetTy`
-/// * the `C = { Ct }` in `Trait<C = { Ct }>` (feature `min_generic_const_args`)
+/// * the `C = { Ct }` in `Trait<C = { Ct }>` (feature `gca_min_const_items`)
 /// * the `f(..): Bound` in `Trait<f(..): Bound>` (feature `return_type_notation`)
 #[derive(Debug, Clone, Copy, StableHash)]
 pub struct AssocItemConstraint<'hir> {
@@ -3611,6 +3611,44 @@ pub enum TyKind<'hir, Unambig = ()> {
     Infer(Unambig),
 }
 
+/// Stores explicit register name from source
+/// for diagnostics only.
+#[derive(Debug, Clone, Copy, StableHash)]
+pub enum InlineAsmRegOrRegClass {
+    Reg { reg: asm::InlineAsmReg, source_name: Option<Symbol> },
+    RegClass(asm::InlineAsmRegClass),
+}
+
+impl InlineAsmRegOrRegClass {
+    // For `rustc_mir_build` and `clippy_utils`
+    pub fn as_target(self) -> asm::InlineAsmRegOrRegClass {
+        match self {
+            Self::Reg { reg, .. } => asm::InlineAsmRegOrRegClass::Reg(reg),
+            Self::RegClass(reg_class) => asm::InlineAsmRegOrRegClass::RegClass(reg_class),
+        }
+    }
+
+    // For `rustc_ast_lowering`
+    pub fn reg_class(self) -> asm::InlineAsmRegClass {
+        self.as_target().reg_class()
+    }
+
+    // For `rustc_ast_lowering`
+    pub fn source_name(self) -> Option<Symbol> {
+        match self {
+            Self::Reg { source_name, .. } => source_name,
+            Self::RegClass(_) => None,
+        }
+    }
+}
+
+// For `rustc_hir_pretty`
+impl fmt::Display for InlineAsmRegOrRegClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_target().fmt(f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, StableHash)]
 pub enum InlineAsmOperand<'hir> {
     In {
@@ -3665,7 +3703,7 @@ impl<'hir> InlineAsmOperand<'hir> {
     pub fn is_clobber(&self) -> bool {
         matches!(
             self,
-            InlineAsmOperand::Out { reg: InlineAsmRegOrRegClass::Reg(_), late: _, expr: None }
+            InlineAsmOperand::Out { reg: InlineAsmRegOrRegClass::Reg { .. }, expr: None, .. }
         )
     }
 }
