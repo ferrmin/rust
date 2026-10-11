@@ -2,9 +2,9 @@ use rustc_ast::token::{self, IdentKind, MetaVarKind, Token, TokenKind};
 use rustc_ast::util::case::Case;
 use rustc_ast::{
     self as ast, BoundAsyncness, BoundConstness, BoundPolarity, DUMMY_NODE_ID, FnPtrTy, FnRetTy,
-    GenericBound, GenericBounds, GenericParam, Generics, Lifetime, MacCall, MutTy, Mutability,
-    Path, Pinnedness, PolyTraitRef, PreciseCapturingArg, TraitBoundModifiers, TraitObjectSyntax,
-    Ty, TyKind, UnsafeBinderTy,
+    GenericBound, GenericBounds, GenericParam, Generics, Lifetime, MacCall, Mutability, Path,
+    Pinnedness, PolyTraitRef, PreciseCapturingArg, TraitBoundModifiers, TraitObjectSyntax, Ty,
+    TyKind, UnsafeBinderTy,
 };
 use rustc_errors::{Applicability, Diag, E0516, PResult};
 use rustc_span::{ErrorGuaranteed, Ident, Span, kw, sym};
@@ -463,14 +463,14 @@ impl<'a> Parser<'a> {
     /// 2. tuple type
     /// 3. bare trait object type where the first trait bound is parenthesized
     fn parse_paren_start_ty(&mut self, lo: Span, allow_plus: AllowPlus) -> PResult<'a, TyKind> {
-        let mut trailing_plus = false;
-        let (ts, trailing) = self.parse_paren_comma_seq(|p| {
+        let mut inside_has_trailing_plus = false;
+        let (ts, trailing_comma) = self.parse_paren_comma_seq(|p| {
             let ty = p.parse_ty()?;
-            trailing_plus = p.prev_token == TokenKind::Plus;
+            inside_has_trailing_plus = p.prev_token == TokenKind::Plus;
             Ok(ty)
         })?;
 
-        if ts.len() == 1 && matches!(trailing, Trailing::No) {
+        if ts.len() == 1 && matches!(trailing_comma, Trailing::No) {
             let ty = ts.into_iter().next().unwrap();
 
             // Let's check if we actually have a bare trait object type where the first trait bound
@@ -478,11 +478,12 @@ impl<'a> Parser<'a> {
             // what's contained between the parentheses resembles a *BareTraitBound*.
             //
             // For context, looking at bounds in general (see *Bound*), only trait bounds are
-            // allowed to be wrapped in parentheses, not however lifetime and use bounds.
-            let maybe_bounds = allow_plus == AllowPlus::Yes && self.token.is_like_plus();
+            // allowed to be wrapped in parentheses, not however outlives and use bounds.
+            let outside_has_eligible_trailing_plus =
+                allow_plus == AllowPlus::Yes && self.token.is_like_plus();
             match ty.kind {
                 // `"(" TypePath ")" "+"`
-                TyKind::Path(None, path) if maybe_bounds => self
+                TyKind::Path(None, path) if outside_has_eligible_trailing_plus => self
                     .finish_parsing_bare_trait_object_ty(
                         ThinVec::new(),
                         path,
@@ -490,18 +491,18 @@ impl<'a> Parser<'a> {
                         true,
                         ast::Parens::Yes,
                     ),
-                // `"(" BareTraitBound\TypePath | UseBound ")" "+"`
+                // `"(" BareTraitBound\TypePath ")" "+"`
                 //
-                // * FIXME: As alluded to above, only trait bounds are meant to allow parens.
-                //   Arguably, it's an accident that we're permitting *UseBound*s and thus types
-                //   like `(use<>)+`. Might need a T-lang FCP to change this.
-                // * We're checking `!trailing_plus` to prevent us from accepting code like
-                //   `(T+)+` or `('a+)+`.
-                // * While we could be looking at `('a)+` which we don't want to accept, we
-                //   know that the `parse_ty` above has already emitted an error since the
-                //   lifetime isn't immediately followed by a `+`.
+                // We actually accept outlives bounds here, too, purely to reduce diagnostic output
+                // for ill-formed code like `('a)+`: We know for a fact that the `parse_ty` above
+                // has already emitted an error for the inner `'a` as it's not followed by `+`.
+                // This way we indirectly suppress unhelpful follow-up diagnostics like E0178
+                // ("bad `+` in type") and E0224 ("no trait bound in trait object type").
                 TyKind::TraitObject(mut bounds, TraitObjectSyntax::None)
-                    if maybe_bounds && bounds.len() == 1 && !trailing_plus =>
+                    if outside_has_eligible_trailing_plus
+                        && !inside_has_trailing_plus
+                        && let [ast::GenericBound::Trait(_) | ast::GenericBound::Outlives(_)] =
+                            bounds.as_slice() =>
                 {
                     self.eat_plus();
                     bounds.append(&mut self.parse_generic_bounds()?);
@@ -545,6 +546,17 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    pub(super) fn parse_ref_ty_no_leading_ampersand(&mut self) -> (Mutability, Option<Box<Ty>>) {
+        let mutbl = self.parse_mutability();
+        match self.parse_ty_no_plus() {
+            Ok(ty) => (mutbl, Some(ty)),
+            Err(err) => {
+                err.cancel();
+                (mutbl, None)
+            }
+        }
+    }
+
     fn maybe_recover_ref_ty_no_leading_ampersand<'cx>(
         &mut self,
         lt: Lifetime,
@@ -555,9 +567,12 @@ impl<'a> Parser<'a> {
             return Err(err);
         }
         let snapshot = self.create_snapshot_for_diagnostic();
-        let mutbl = self.parse_mutability();
-        match self.parse_ty_no_plus() {
-            Ok(ty) => {
+        match self.parse_ref_ty_no_leading_ampersand() {
+            (_, None) => {
+                self.restore_snapshot(snapshot);
+                Err(err)
+            }
+            (mutbl, Some(ty)) => {
                 err.span_suggestion_verbose(
                     lo.shrink_to_lo(),
                     "you might have meant to write a reference type here",
@@ -565,12 +580,7 @@ impl<'a> Parser<'a> {
                     Applicability::MaybeIncorrect,
                 );
                 err.emit();
-                Ok(TyKind::Ref(Some(lt), MutTy { ty, mutbl }))
-            }
-            Err(diag) => {
-                diag.cancel();
-                self.restore_snapshot(snapshot);
-                Err(err)
+                Ok(TyKind::Ref(Some(lt), ty, mutbl))
             }
         }
     }
@@ -626,7 +636,7 @@ impl<'a> Parser<'a> {
                 )
                 .emit();
 
-            return Ok(TyKind::Ptr(MutTy { ty, mutbl }));
+            return Ok(TyKind::Ptr(ty, mutbl));
         }
         // This is unreachable because we always get into if above and return from it
         unreachable!("this could never happen")
@@ -643,7 +653,7 @@ impl<'a> Parser<'a> {
             Mutability::Not
         });
         let ty = self.parse_ty_no_plus()?;
-        Ok(TyKind::Ptr(MutTy { ty, mutbl }))
+        Ok(TyKind::Ptr(ty, mutbl))
     }
 
     /// Parses an array (`[TYPE; EXPR]`) or slice (`[TYPE]`) type.
@@ -761,8 +771,8 @@ impl<'a> Parser<'a> {
         }
         let ty = self.parse_ty_no_plus()?;
         Ok(match pinned {
-            Pinnedness::Not => TyKind::Ref(opt_lifetime, MutTy { ty, mutbl }),
-            Pinnedness::Pinned => TyKind::PinnedRef(opt_lifetime, MutTy { ty, mutbl }),
+            Pinnedness::Not => TyKind::Ref(opt_lifetime, ty, mutbl),
+            Pinnedness::Pinned => TyKind::PinnedRef(opt_lifetime, ty, mutbl),
         })
     }
 

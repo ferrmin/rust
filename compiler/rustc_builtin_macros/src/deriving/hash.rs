@@ -21,7 +21,7 @@ pub(crate) fn expand_deriving_hash(
 
     let param = {
         let path = path_std!(cx, span, hash::Hasher);
-        cx.typaram(span, typaram, thin_vec![cx.trait_bound(path, false)], None)
+        cx.typaram(typaram, thin_vec![cx.trait_bound(path, false)], None)
     };
 
     let generics = ast::Generics {
@@ -65,7 +65,7 @@ fn hash_substructure(cx: &ExtCtxt<'_>, span: Span, substr: Substructure<'_>) -> 
         cx.stmt_expr(expr)
     };
 
-    let (stmts, match_expr) = match substr {
+    let (stmts, match_expr) = match substr.fields {
         Struct(_, fields) | EnumMatching(.., fields) => {
             let stmts =
                 fields.into_iter().map(|field| call_hash(field.span, field.self_expr)).collect();

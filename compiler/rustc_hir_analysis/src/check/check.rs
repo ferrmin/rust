@@ -964,8 +964,8 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Result<(),
             res = res.and(enter_wf_checking_ctxt(tcx, def_id, |wfcx| {
                 let ty = tcx.type_of(def_id).instantiate_identity();
                 let ty_span = tcx.ty_span(def_id);
-                let ty = wfcx.deeply_normalize(ty_span, Some(WellFormedLoc::Ty(def_id)), ty);
-                wfcx.register_wf_obligation(ty_span, Some(WellFormedLoc::Ty(def_id)), ty.into());
+                let ty = wfcx.deeply_normalize(ty_span, WellFormedLoc::Ty(def_id), ty);
+                wfcx.register_wf_obligation(ty_span, WellFormedLoc::Ty(def_id), ty.into());
                 wfcx.register_bound(
                     traits::ObligationCause::new(
                         ty_span,
@@ -993,12 +993,8 @@ pub(crate) fn check_item_type(tcx: TyCtxt<'_>, def_id: LocalDefId) -> Result<(),
             let span = tcx.def_span(def_id);
             if tcx.type_alias_is_checked(def_id) {
                 res = res.and(enter_wf_checking_ctxt(tcx, def_id, |wfcx| {
-                    let item_ty = wfcx.deeply_normalize(span, Some(WellFormedLoc::Ty(def_id)), ty);
-                    wfcx.register_wf_obligation(
-                        span,
-                        Some(WellFormedLoc::Ty(def_id)),
-                        item_ty.into(),
-                    );
+                    let item_ty = wfcx.deeply_normalize(span, WellFormedLoc::Ty(def_id), ty);
+                    wfcx.register_wf_obligation(span, WellFormedLoc::Ty(def_id), item_ty.into());
                     check_where_clauses(wfcx, def_id);
                     Ok(())
                 }));
@@ -1543,6 +1539,8 @@ fn check_simd(tcx: TyCtxt<'_>, sp: Span, def_id: LocalDefId) {
         match element_ty.kind() {
             ty::Param(_) => (), // pass struct<T>([T; 4]) through, let monomorphization catch errors
             ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::RawPtr(_, _) => (), // struct([u8; 4]) is ok
+            // So we can create structs like; `struct bfloat16x4_t (f16b x 4);`
+            ty::Adt(def, _) if tcx.is_lang_item(def.did(), LangItem::F16B) => (),
             _ => {
                 struct_span_code_err!(
                     tcx.dcx(),

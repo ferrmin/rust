@@ -1027,10 +1027,10 @@ pub fn walk_ty<'v, V: Visitor<'v>>(visitor: &mut V, typ: &'v Ty<'v, AmbigArg>) -
 
     match *kind {
         TyKind::Slice(ref ty) => try_visit!(visitor.visit_ty_unambig(ty)),
-        TyKind::Ptr(ref mutable_type) => try_visit!(visitor.visit_ty_unambig(mutable_type.ty)),
-        TyKind::Ref(ref lifetime, ref mutable_type) => {
+        TyKind::Ptr(ref ty, _) => try_visit!(visitor.visit_ty_unambig(ty)),
+        TyKind::Ref(ref lifetime, ref ty, _) => {
             try_visit!(visitor.visit_lifetime(lifetime));
-            try_visit!(visitor.visit_ty_unambig(mutable_type.ty));
+            try_visit!(visitor.visit_ty_unambig(ty));
         }
         TyKind::Never => {}
         TyKind::Tup(tuple_element_types) => {
@@ -1644,6 +1644,7 @@ pub fn walk_test_binder_constraint<'v, V: Visitor<'v>>(
         TestBinderConstraint::Or { items } => {
             walk_list!(visitor, visit_test_binder_constraint, *items)
         }
+        TestBinderConstraint::Ambiguity { span: _ } => {}
         TestBinderConstraint::Lifetime { lhs, rhs } => {
             try_visit!(visitor.visit_lifetime(lhs));
             try_visit!(visitor.visit_lifetime(rhs));

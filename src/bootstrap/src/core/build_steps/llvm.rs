@@ -804,11 +804,11 @@ fn check_llvm_version(builder: &Builder<'_>, llvm_config: &Path) {
     let version = get_llvm_version(builder, llvm_config);
     let mut parts = version.split('.').take(2).filter_map(|s| s.parse::<u32>().ok());
     if let (Some(major), Some(_minor)) = (parts.next(), parts.next())
-        && major >= 21
+        && major >= 22
     {
         return;
     }
-    panic!("\n\nbad LLVM version: {version}, need >=21\n\n")
+    panic!("\n\nbad LLVM version: {version}, need >=22\n\n")
 }
 
 /// C/C++ debug info remap flags for LLVM build.
@@ -1724,7 +1724,6 @@ impl CommandLineStep for Lld {
         if builder.config.rpath_enabled(target)
             && helpers::use_host_linker(target)
             && llvm_output.link_shared()
-            && target.contains("linux")
         {
             // So we inform LLD where it can find LLVM's libraries by adding an rpath entry to the
             // expected parent `lib` directory.
@@ -1732,7 +1731,12 @@ impl CommandLineStep for Lld {
             // Be careful when changing this path, we need to ensure it's quoted or escaped:
             // `$ORIGIN` would otherwise be expanded when the `LdFlags` are passed verbatim to
             // cmake.
-            ldflags.push_all("-Wl,-rpath,'$ORIGIN/../../../'");
+            if target.contains("linux") {
+                ldflags.push_all("-Wl,-rpath,'$ORIGIN/../../../'");
+            }
+            if target.contains("apple-darwin") {
+                ldflags.push_all("-Wl,-rpath,'@loader_path/../../../'");
+            }
         }
 
         configure_cmake(builder, target, &mut cfg, true, ldflags, CcFlags::default(), &[]);
@@ -1927,7 +1931,7 @@ fn supported_sanitizers(
         "aarch64-unknown-linux-gnu" => common_libs(
             "linux",
             "aarch64",
-            &["asan", "lsan", "msan", "tsan", "hwasan", "rtsan", "ubsan"],
+            &["asan", "lsan", "msan", "tsan", "hwasan", "rtsan", "ubsan", "ubsan_minimal"],
         ),
         "aarch64-unknown-linux-ohos" => {
             common_libs("linux", "aarch64", &["asan", "lsan", "msan", "tsan", "hwasan"])
@@ -1948,7 +1952,17 @@ fn supported_sanitizers(
         "x86_64-unknown-linux-gnu" => common_libs(
             "linux",
             "x86_64",
-            &["asan", "dfsan", "lsan", "msan", "safestack", "tsan", "rtsan", "ubsan"],
+            &[
+                "asan",
+                "dfsan",
+                "lsan",
+                "msan",
+                "safestack",
+                "tsan",
+                "rtsan",
+                "ubsan",
+                "ubsan_minimal",
+            ],
         ),
         "x86_64-unknown-linux-gnuasan" => common_libs("linux", "x86_64", &["asan"]),
         "x86_64-unknown-linux-gnumsan" => common_libs("linux", "x86_64", &["msan"]),

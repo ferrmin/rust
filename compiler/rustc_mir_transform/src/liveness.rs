@@ -120,7 +120,7 @@ pub(crate) fn check_liveness<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Den
                 if let TerminatorKind::Return | TerminatorKind::UnwindResume =
                     bbdata.terminator().kind
                 {
-                    bbdata.terminator_mut().kind = TerminatorKind::Goto { target: START_BLOCK };
+                    bbdata.terminator_mut().kind = TerminatorKind::goto(START_BLOCK);
                 }
             }
             body = &body_mem;
@@ -293,7 +293,7 @@ fn annotate_mut_binding_to_immutable_binding<'tcx>(
         local.as_usize() - if tcx.is_closure_like(body_def_id.to_def_id()) { 2 } else { 1 };
     let fn_decl = tcx.hir_node_by_def_id(body_def_id).fn_decl()?;
     let ty = fn_decl.inputs[hir_param_index];
-    let hir::TyKind::Ref(lt, mut_ty) = ty.kind else { return None };
+    let hir::TyKind::Ref(lt, inner_ty, mutbl) = ty.kind else { return None };
 
     // ... as a binding pattern.
     let hir_body = tcx.hir_maybe_body_owned_by(body_def_id)?;
@@ -312,12 +312,12 @@ fn annotate_mut_binding_to_immutable_binding<'tcx>(
 
     // Changes to the parameter's type.
     let pre = if lt.ident.span.is_empty() { "" } else { " " };
-    let ty_span = if mut_ty.mutbl.is_mut() {
+    let ty_span = if mutbl.is_mut() {
         // Leave `&'name mut Ty` and `&mut Ty` as they are (#136028).
         None
     } else {
         // `&'name Ty` -> `&'name mut Ty` or `&Ty` -> `&mut Ty`
-        Some(mut_ty.ty.span.shrink_to_lo())
+        Some(inner_ty.span.shrink_to_lo())
     };
 
     return Some(diagnostics::UnusedAssignSuggestion {
@@ -434,7 +434,7 @@ fn find_self_assignments<'tcx>(
                             statement_index: bb_data.statements.len(),
                         });
                         // Target block
-                        self_assign.insert(Location { block: *target, statement_index: 0 });
+                        self_assign.insert(target.start_location());
                     }
                 }
                 // Straight self-assignment.
@@ -1418,7 +1418,7 @@ impl<'tcx> Visitor<'tcx> for TransferFunction<'_, 'tcx> {
         match terminator.kind {
             TerminatorKind::Return
             | TerminatorKind::Yield { .. }
-            | TerminatorKind::Goto { target: START_BLOCK } // Inserted for the `FnMut` case.
+            | TerminatorKind::Goto { target: START_BLOCK, .. } // Inserted for the `FnMut` case.
             | TerminatorKind::Call { target: None, .. } // unwinding could be caught
                 if self.capture_kind != CaptureKind::None =>
             {

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use rustc_abi::{FieldIdx, Integer, Size, VariantIdx};
 use rustc_ast::{AsmMacro, InlineAsmOptions, InlineAsmTemplatePiece, Mutability};
-use rustc_attr_ir::AttributeKind;
+use rustc_attr_ir::UnrollAttr;
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_hir as hir;
@@ -62,7 +62,7 @@ macro_rules! thir_with_elements {
         #[derive(Debug, StableHash, Clone)]
         pub struct Thir<'tcx> {
             pub body_type: BodyTy<'tcx>,
-            pub attributes: FxIndexMap<ExprId, ThinVec<AttributeKind>>,
+            pub loop_hint_attrs: FxIndexMap<ExprId, ThinVec<UnrollAttr>>,
             $(
                 pub $name: IndexVec<$id, $value>,
             )*
@@ -72,7 +72,7 @@ macro_rules! thir_with_elements {
             pub fn new(body_type: BodyTy<'tcx>) -> Thir<'tcx> {
                 Thir {
                     body_type,
-                    attributes: FxIndexMap::default(),
+                    loop_hint_attrs: FxIndexMap::default(),
                     $(
                         $name: IndexVec::new(),
                     )*

@@ -348,7 +348,7 @@ pub(super) fn build_function(cx: &mut DocContext<'_>, def_id: DefId) -> Box<clea
         // or due to the query calls, consider inserting the late-bound lifetime params
         // right after the last early-bound lifetime param followed by only sorting
         // the slice of lifetime params.
-        generics.params.sort_by_key(|param| cx.tcx.def_ident_span(param.def_id).unwrap());
+        generics.params.sort_by_key(|param| cx.tcx.def_ident_span(param.def_id).unwrap().lo_hi());
     }
 
     let decl = clean_poly_fn_sig(cx, Some(def_id), sig);
@@ -786,7 +786,7 @@ fn build_module_items(
             && find_attr!(
                 load_attrs(cx.tcx, reexport_def_id),
                 Doc(d)
-                if d.inline.first().is_some_and(|(inline, _)| *inline == DocInline::NoInline)
+                if d.inline.is_some_and(|(inline, _)| inline == DocInline::NoInline)
             )
         {
             // We don't inline foreign `use`.

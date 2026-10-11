@@ -302,7 +302,6 @@
 #![feature(must_not_suspend)]
 #![feature(needs_panic_runtime)]
 #![feature(negative_impls)]
-#![feature(optimize_attribute)]
 #![feature(prelude_import)]
 #![feature(rustc_attrs)]
 #![feature(rustdoc_internals)]
@@ -313,7 +312,6 @@
 #![feature(try_blocks)]
 #![feature(try_trait_v2)]
 #![feature(type_alias_impl_trait)]
-#![feature(unwrap_infallible)]
 // tidy-alphabetical-end
 //
 // Library features (core):
@@ -334,7 +332,6 @@
 #![feature(core_io)]
 #![feature(core_io_borrowed_buf)]
 #![feature(core_io_internals)]
-#![feature(cstr_display)]
 #![feature(cursor_split)]
 #![feature(derive_const)]
 #![feature(duration_constants)]
@@ -347,7 +344,6 @@
 #![feature(fmt_internals)]
 #![feature(fn_static)]
 #![feature(formatting_options)]
-#![feature(funnel_shifts)]
 #![feature(generic_atomic)]
 #![feature(hash_map_internals)]
 #![feature(hash_map_macro)]
@@ -758,7 +754,7 @@ pub use core::concat_bytes;
 )]
 #[unstable(feature = "derive_macro_global_path", issue = "154645")]
 pub use core::derive;
-#[unstable(feature = "gca_min_const_items", issue = "132980")]
+#[unstable(feature = "gca_min_const_items", issue = "132980", implied_by = "gca_adts")]
 pub use core::gca;
 #[stable(feature = "matches_macro", since = "1.42.0")]
 pub use core::matches;
