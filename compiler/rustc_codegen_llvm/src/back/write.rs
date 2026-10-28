@@ -326,8 +326,8 @@ struct DiagnosticHandlerCallbackData<'a> {
     shared_emitter: &'a SharedEmitter,
 }
 
-pub(crate) struct DiagnosticHandlers<'a> {
-    llcx: &'a llvm::Context,
+pub(crate) struct DiagnosticHandlers<'a, 'll> {
+    llcx: llvm::Context<'ll>,
     old_handler: Option<ptr::NonNull<llvm::DiagnosticHandler>>,
 
     /// Ownership of the box-allocated data that was installed (as a pointer)
@@ -337,11 +337,11 @@ pub(crate) struct DiagnosticHandlers<'a> {
     diagnostic_handler_callback_data: *mut DiagnosticHandlerCallbackData<'a>,
 }
 
-impl<'a> DiagnosticHandlers<'a> {
+impl<'a, 'll> DiagnosticHandlers<'a, 'll> {
     pub(crate) fn new(
         cgcx: &'a CodegenContext,
         shared_emitter: &'a SharedEmitter,
-        llcx: &'a llvm::Context,
+        llcx: llvm::Context<'ll>,
         module: &ModuleCodegen<ModuleLlvm>,
         stage: CodegenDiagnosticsStage,
     ) -> Self {
@@ -396,7 +396,7 @@ impl<'a> DiagnosticHandlers<'a> {
     }
 }
 
-impl<'a> Drop for DiagnosticHandlers<'a> {
+impl<'a, 'll> Drop for DiagnosticHandlers<'a, 'll> {
     fn drop(&mut self) {
         unsafe {
             llvm::LLVMRustContextSetDiagnosticHandler(self.llcx, self.old_handler);
@@ -654,7 +654,7 @@ pub(crate) unsafe fn llvm_optimize<'ll>(
         None
     };
 
-    fn handle_offload<'ll>(cx: &'ll SimpleCx<'_>, old_fn: &llvm::Value) {
+    fn handle_offload<'ll>(cx: &SimpleCx<'ll>, old_fn: &'ll llvm::Value) {
         let old_fn_ty = cx.get_type_of_global(old_fn);
         let old_param_types = cx.func_params_types(old_fn_ty);
         let old_param_count = old_param_types.len();
@@ -818,28 +818,8 @@ pub(crate) unsafe fn llvm_optimize<'ll>(
         )
     };
 
-    if cgcx.target_is_like_gpu
-        && config.offload.iter().any(|o| matches!(o, config::Offload::Device(_)))
-    {
-        let device_path = cgcx.output_filenames.path(OutputType::Object);
-        let device_dir = device_path.parent().unwrap();
-        let device_out = device_dir.join("device.bin");
-        let device_out_c = path_to_c_string(device_out.as_path());
-        // 1) Bundle device module into offload image device.bin (device TM)
-        let ok = unsafe {
-            llvm::RustOffloadWrapper::get_instance().llvm_rust_bundle_images(
-                llmod,
-                tm,
-                device_out_c.as_c_str(),
-            )
-        };
-        if !ok || !device_out.exists() {
-            dcx.emit_err(crate::diagnostics::OffloadBundleImagesFailed);
-        }
-    }
-
     // This assumes that we previously compiled our kernels for a gpu target, which created a
-    // `device.bin` artifact. The user is supposed to provide us with a path to this artifact, we
+    // `<crate>.bc` artifact. The user is supposed to provide us with a path to this artifact, we
     // don't need any other artifacts from the previous run.
     if !cgcx.target_is_like_gpu && is_final_stage {
         if let Some(device_path) = config
@@ -850,19 +830,15 @@ pub(crate) unsafe fn llvm_optimize<'ll>(
             let device_pathbuf = PathBuf::from(device_path);
             if device_pathbuf.is_relative() {
                 dcx.emit_err(crate::diagnostics::OffloadWithoutAbsPath);
-            } else if device_pathbuf
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n != "device.bin")
-            {
+            } else if device_pathbuf.extension().and_then(|e| e.to_str()) != Some("bc") {
                 dcx.emit_err(crate::diagnostics::OffloadWrongFileName);
             } else if !device_pathbuf.exists() {
                 dcx.emit_err(crate::diagnostics::OffloadNonexistingPath);
             }
-            let device_bin_c = path_to_c_string(device_pathbuf.as_path());
+            let device_bitcode_c = path_to_c_string(device_pathbuf.as_path());
             let ok = unsafe {
                 llvm::RustOffloadWrapper::get_instance()
-                    .llvm_rust_offload_wrap_images(llmod, device_bin_c.as_c_str())
+                    .llvm_rust_offload_wrap_images(llmod, device_bitcode_c.as_c_str())
             };
             if !ok {
                 dcx.emit_err(crate::diagnostics::OffloadWrapImagesFailed);
@@ -1229,10 +1205,10 @@ pub(crate) fn bitcode_section_name(cgcx: &CodegenContext) -> &'static CStr {
 }
 
 /// Embed the bitcode of an LLVM module for LTO in the LLVM module itself.
-fn embed_bitcode(
+fn embed_bitcode<'ll>(
     cgcx: &CodegenContext,
-    llcx: &llvm::Context,
-    llmod: &llvm::Module,
+    llcx: llvm::Context<'ll>,
+    llmod: &'ll llvm::Module,
     bitcode: &[u8],
 ) {
     // We're adding custom sections to the output object file, but we definitely
@@ -1315,7 +1291,11 @@ fn embed_bitcode(
 // when using MSVC linker. We do this only for data, as linker can fix up
 // code references on its own.
 // See #26591, #27438
-fn create_msvc_imps(cgcx: &CodegenContext, llcx: &llvm::Context, llmod: &llvm::Module) {
+fn create_msvc_imps<'ll>(
+    cgcx: &CodegenContext,
+    llcx: llvm::Context<'ll>,
+    llmod: &'ll llvm::Module,
+) {
     if !cgcx.msvc_imps_needed {
         return;
     }
