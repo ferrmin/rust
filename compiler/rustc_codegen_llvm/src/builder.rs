@@ -7,10 +7,10 @@ pub(crate) mod autodiff;
 pub(crate) mod gpu_offload;
 
 use libc::{c_char, c_uint};
-use rustc_abi::{self as abi, Align, CanonAbi, Size, WrappingRange};
+use rustc_abi::{self as abi, Align, CanonAbi, Float, Size, WrappingRange};
 use rustc_attr_ir::UnrollAttr;
 use rustc_codegen_ssa::MemFlags;
-use rustc_codegen_ssa::common::{IntPredicate, RealPredicate, SynchronizationScope, TypeKind};
+use rustc_codegen_ssa::common::{IntPredicate, RealPredicate, SynchronizationScope};
 use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
 use rustc_codegen_ssa::mir::place::PlaceRef;
 use rustc_codegen_ssa::traits::*;
@@ -36,7 +36,7 @@ use crate::common::Funclet;
 use crate::context::{CodegenCx, FullCx, GenericCx, SCx};
 use crate::llvm::{
     self, AtomicOrdering, AtomicRmwBinOp, BasicBlock, FromGeneric, GEPNoWrapFlags, Metadata, TRUE,
-    ToLlvmBool, Type, Value,
+    ToLlvmBool, Type, TypeKind, Value,
 };
 use crate::type_of::LayoutLlvmExt;
 
@@ -160,7 +160,9 @@ impl<'a, 'll, CX: Borrow<SCx<'ll>>> GenericBuilder<'a, 'll, CX> {
         val
     }
 
-    pub(crate) fn inbounds_gep(
+    /// Don't use this method: instead use `inbounds_gep` or `inbounds_ptradd`.
+    // FIXME: Remove once unused.
+    pub(crate) fn typed_inbounds_gep(
         &mut self,
         ty: &'ll Type,
         ptr: &'ll Value,
@@ -175,6 +177,33 @@ impl<'a, 'll, CX: Borrow<SCx<'ll>>> GenericBuilder<'a, 'll, CX> {
                 indices.len() as c_uint,
                 UNNAMED,
                 GEPNoWrapFlags::InBounds,
+            )
+        }
+    }
+
+    fn build_gep(
+        &mut self,
+        stride: Size,
+        ptr: &'ll Value,
+        index: &'ll Value,
+        flags: GEPNoWrapFlags,
+    ) -> &'ll Value {
+        let ty = if stride.bytes() == 1 {
+            // LLVM prefers `i8` as the canonical form for a single-byte GEP.
+            self.cx.type_i8()
+        } else {
+            self.cx.type_array(self.cx.type_i8(), stride.bytes())
+        };
+        let indices = &[index];
+        unsafe {
+            llvm::LLVMBuildGEPWithNoWrapFlags(
+                self.llbuilder(),
+                ty,
+                ptr,
+                indices.as_ptr(),
+                indices.len() as c_uint,
+                UNNAMED,
+                flags,
             )
         }
     }
@@ -963,56 +992,16 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         }
     }
 
-    fn gep(&mut self, ty: &'ll Type, ptr: &'ll Value, indices: &[&'ll Value]) -> &'ll Value {
-        unsafe {
-            llvm::LLVMBuildGEPWithNoWrapFlags(
-                self.llbuilder(),
-                ty,
-                ptr,
-                indices.as_ptr(),
-                indices.len() as c_uint,
-                UNNAMED,
-                GEPNoWrapFlags::default(),
-            )
-        }
+    fn gep(&mut self, stride: Size, ptr: &'ll Value, index: &'ll Value) -> &'ll Value {
+        self.build_gep(stride, ptr, index, GEPNoWrapFlags::default())
     }
 
-    fn inbounds_gep(
-        &mut self,
-        ty: &'ll Type,
-        ptr: &'ll Value,
-        indices: &[&'ll Value],
-    ) -> &'ll Value {
-        unsafe {
-            llvm::LLVMBuildGEPWithNoWrapFlags(
-                self.llbuilder(),
-                ty,
-                ptr,
-                indices.as_ptr(),
-                indices.len() as c_uint,
-                UNNAMED,
-                GEPNoWrapFlags::InBounds,
-            )
-        }
+    fn inbounds_gep(&mut self, stride: Size, ptr: &'ll Value, index: &'ll Value) -> &'ll Value {
+        self.build_gep(stride, ptr, index, GEPNoWrapFlags::InBounds)
     }
 
-    fn inbounds_nuw_gep(
-        &mut self,
-        ty: &'ll Type,
-        ptr: &'ll Value,
-        indices: &[&'ll Value],
-    ) -> &'ll Value {
-        unsafe {
-            llvm::LLVMBuildGEPWithNoWrapFlags(
-                self.llbuilder(),
-                ty,
-                ptr,
-                indices.as_ptr(),
-                indices.len() as c_uint,
-                UNNAMED,
-                GEPNoWrapFlags::InBounds | GEPNoWrapFlags::NUW,
-            )
-        }
+    fn inbounds_nuw_gep(&mut self, stride: Size, ptr: &'ll Value, index: &'ll Value) -> &'ll Value {
+        self.build_gep(stride, ptr, index, GEPNoWrapFlags::InBounds | GEPNoWrapFlags::NUW)
     }
 
     /* Casts */
@@ -1073,10 +1062,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         // other control flow automatically.
         if self.sess().target.is_like_wasm {
             let src_ty = self.cx.val_ty(val);
-            if self.cx.type_kind(src_ty) != TypeKind::Vector {
-                let float_width = self.cx.float_width(src_ty);
-                let int_width = self.cx.int_width(dest_ty);
-                if matches!((int_width, float_width), (32 | 64, 32 | 64)) {
+            if let Some(float_type) = self.cx.float_type(src_ty) {
+                let int_width = self.cx.int_width(dest_ty).expect("dest was not an integer");
+                if matches!((int_width, float_type), (32 | 64, Float::F32 | Float::F64)) {
                     return self.call_intrinsic(
                         "llvm.wasm.trunc.unsigned",
                         &[dest_ty, src_ty],
@@ -1092,10 +1080,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         // see `fptoui` above for why wasm is different here
         if self.sess().target.is_like_wasm {
             let src_ty = self.cx.val_ty(val);
-            if self.cx.type_kind(src_ty) != TypeKind::Vector {
-                let float_width = self.cx.float_width(src_ty);
-                let int_width = self.cx.int_width(dest_ty);
-                if matches!((int_width, float_width), (32 | 64, 32 | 64)) {
+            if let Some(float_type) = self.cx.float_type(src_ty) {
+                let int_width = self.cx.int_width(dest_ty).expect("dest ty was not an integer");
+                if matches!((int_width, float_type), (32 | 64, Float::F32 | Float::F64)) {
                     return self.call_intrinsic(
                         "llvm.wasm.trunc.signed",
                         &[dest_ty, src_ty],
@@ -1278,12 +1265,12 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         unsafe { llvm::LLVMBuildExtractElement(self.llbuilder(), vec, idx, UNNAMED) }
     }
 
-    fn vector_splat(&mut self, num_elts: usize, elt: &'ll Value) -> &'ll Value {
+    fn vector_splat(&mut self, num_elts: u64, elt: &'ll Value) -> &'ll Value {
         unsafe {
             let elt_ty = self.cx.val_ty(elt);
-            let undef = llvm::LLVMGetUndef(self.type_vector(elt_ty, num_elts as u64));
+            let undef = llvm::LLVMGetUndef(self.type_vector(elt_ty, num_elts));
             let vec = self.insert_element(undef, elt, self.cx.const_i32(0));
-            let vec_i32_ty = self.type_vector(self.type_i32(), num_elts as u64);
+            let vec_i32_ty = self.type_vector(self.type_i32(), num_elts);
             self.shuffle_vector(vec, undef, self.const_null(vec_i32_ty))
         }
     }
@@ -1307,7 +1294,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
     }
 
     fn cleanup_landing_pad(&mut self, pers_fn: &'ll Value) -> (&'ll Value, &'ll Value) {
-        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()], false);
+        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()]);
         let landing_pad = self.landing_pad(ty, pers_fn, 0);
         unsafe {
             llvm::LLVMSetCleanup(landing_pad, llvm::TRUE);
@@ -1316,13 +1303,13 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
     }
 
     fn filter_landing_pad(&mut self, pers_fn: &'ll Value) {
-        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()], false);
+        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()]);
         let landing_pad = self.landing_pad(ty, pers_fn, 1);
         self.add_clause(landing_pad, self.const_array(self.type_ptr(), &[]));
     }
 
     fn resume(&mut self, exn0: &'ll Value, exn1: &'ll Value) {
-        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()], false);
+        let ty = self.type_struct(&[self.type_ptr(), self.type_i32()]);
         let mut exn = self.const_poison(ty);
         exn = self.insert_value(exn, exn0, 0);
         exn = self.insert_value(exn, exn1, 1);
@@ -1729,11 +1716,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
             .val
             .store(&mut body_bx, PlaceRef::new_sized_aligned(current, cg_elem.layout, align));
 
-        let next = body_bx.inbounds_gep(
-            self.backend_type(cg_elem.layout),
-            current,
-            &[self.const_usize(1)],
-        );
+        let next = body_bx.inbounds_ptradd(current, self.const_usize(cg_elem.layout.size.bytes()));
         body_bx.br(header_bb);
         header_bx.add_incoming_to_phi(current, next, body_bb);
 
