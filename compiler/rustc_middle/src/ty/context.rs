@@ -73,11 +73,11 @@ use crate::traits::solve::{
 };
 use crate::ty::predicate::ExistentialPredicateStableCmpExt as _;
 use crate::ty::{
-    self, AdtDef, AdtDefData, AdtKind, Binder, Clause, ClausePolarity, Clauses, Const, ConstKind,
-    FnSigKind, GenericArg, GenericArgsUnsized, GenericParamDefKind, List, ListWithCachedTypeInfo,
-    ParamConst, Pattern, PatternKind, PolyExistentialPredicate, PolyFnSig, Predicate,
-    PredicateKind, Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind, TyVid, ValTree,
-    ValTreeKind, Visibility,
+    self, AdtDef, AdtDefData, AdtKind, Binder, CanonicalizerState, Clause, ClausePolarity, Clauses,
+    Const, ConstKind, FnSigKind, GenericArg, GenericArgsUnsized, GenericParamDefKind, List,
+    ListWithCachedTypeInfo, ParamConst, Pattern, PatternKind, PolyExistentialPredicate, PolyFnSig,
+    Predicate, PredicateKind, Region, RegionKind, ReprOptions, TraitObjectVisitor, Ty, TyKind,
+    TyVid, ValTree, ValTreeKind, Visibility,
 };
 
 impl<'tcx> rustc_type_ir::inherent::DefId<TyCtxt<'tcx>> for DefId {
@@ -703,6 +703,13 @@ pub struct GlobalCaches<'tcx> {
     new_solver_evaluation_cache: Lock<search_graph::GlobalCache<TyCtxt<'tcx>>>,
     new_solver_canonical_param_env_cache: Lock<ty::CanonicalParamEnvCache<TyCtxt<'tcx>>>,
 
+    /// State reused by each new canonicalizer, and then cleared (but not deallocated) once the
+    /// canonicalizer is finished. A performance win, because it avoids reallocating new
+    /// vecs/hashmaps for every canonicalizer. The `Vec` is needed because there can be multiple
+    /// canonicalizers in use at once if the number of threads > 1. The `Box` avoids memcpy because
+    /// `CanonicalizerState` is moderately big.
+    pub canonicalizer_states: Lock<Vec<Box<CanonicalizerState<TyCtxt<'tcx>>>>>,
+
     pub canonical_param_env_cache: CanonicalParamEnvCache<'tcx>,
 
     /// Caches the index of the highest bound var in clauses in a canonical binder.
@@ -1081,7 +1088,12 @@ impl<'tcx> TyCtxt<'tcx> {
     // Whether the body owner is synthetic, which in this case means it does not correspond to
     // meaningful HIR. This is currently used to skip over MIR borrowck.
     pub fn is_synthetic_mir(self, def_id: impl Into<DefId>) -> bool {
-        matches!(self.def_kind(def_id.into()), DefKind::SyntheticCoroutineBody)
+        let def_id = def_id.into();
+        match self.def_kind(def_id) {
+            DefKind::SyntheticCoroutineBody => true,
+            DefKind::Const | DefKind::AssocConst => self.const_of_item(def_id).is_some(),
+            _ => false,
+        }
     }
 
     /// Returns `true` if the node pointed to by `def_id` is a general coroutine that implements `Coroutine`.
