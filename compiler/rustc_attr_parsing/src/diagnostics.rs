@@ -1281,7 +1281,7 @@ pub(crate) struct DeprecatedAnnotationHasNoEffect {
 }
 
 #[derive(Diagnostic)]
-#[diag("`#[non_exhaustive]` can't be used to annotate items with default field values")]
+#[diag("`#[non_exhaustive]` can't be used to annotate structs with default field values")]
 pub(crate) struct NonExhaustiveWithDefaultFieldValues {
     #[primary_span]
     pub attr_span: Span,
@@ -1335,10 +1335,9 @@ pub(crate) struct UnknownVersionLiteral {
     pub span: Span,
 }
 
-// FIXME(jdonszelmann) duplicated from `rustc_passes`, remove once `check_attr` is integrated.
 #[derive(Diagnostic)]
 #[diag("multiple `{$name}` attributes")]
-pub(crate) struct UnusedMultiple {
+pub struct UnusedMultiple {
     #[primary_span]
     #[suggestion("remove this attribute", code = "", applicability = "unspecified")]
     pub this: Span,
@@ -1932,6 +1931,19 @@ pub(crate) struct SuffixedLiteralInAttribute {
 }
 
 #[derive(Diagnostic)]
+#[diag(
+    "{$count ->
+    [one] this attribute is
+    *[other] these attributes are
+    } not allowed in this context"
+)]
+pub(crate) struct AttributeInInvalidContext {
+    #[primary_span]
+    pub attrs: Vec<Span>,
+    pub count: usize,
+}
+
+#[derive(Diagnostic)]
 #[diag("link name must not be empty", code = E0454)]
 pub(crate) struct EmptyLinkName {
     #[primary_span]
@@ -2179,10 +2191,11 @@ pub(crate) struct UnusedDuplicate {
 }
 
 #[derive(Diagnostic)]
-pub(crate) enum MacroExport {
-    #[diag("`#[macro_export]` has no effect on declarative macro definitions")]
-    #[note("declarative macros follow the same exporting rules as regular items")]
-    OnDeclMacro,
+#[diag("`#[macro_export]` is not allowed on declarative macro definitions")]
+#[note("declarative macros follow the same exporting rules as regular items")]
+pub(crate) struct MacroExportOnDeclMacro {
+    #[primary_span]
+    pub attr_span: Span,
 }
 
 #[derive(Diagnostic)]
