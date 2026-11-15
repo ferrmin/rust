@@ -501,6 +501,9 @@ pub(crate) fn spanned_type_di_node<'ll, 'tcx>(
         | ty::Error(_) => {
             bug!("debuginfo: unexpected type in type_di_node(): {:?}", t)
         }
+
+        // FIXME(scrabsha)
+        ty::View(..) => unimplemented!(),
     };
 
     {
@@ -531,7 +534,7 @@ pub(crate) fn spanned_type_di_node<'ll, 'tcx>(
 
 // FIXME(mw): Cache this via a regular UniqueTypeId instead of an extra field in the debug context.
 fn recursion_marker_type_di_node<'ll, 'tcx>(cx: &CodegenCx<'ll, 'tcx>) -> &'ll DIType {
-    *debug_context(cx).recursion_marker_type.get_or_init(move || {
+    debug_context(cx).recursion_marker_type.get_or_init(move || {
         // The choice of type here is pretty arbitrary -
         // anything reading the debuginfo for a recursive
         // type is going to see *something* weird - the only
@@ -990,7 +993,7 @@ pub(crate) fn build_compile_unit_di_node<'ll, 'tcx>(
         );
         let flags = c"";
 
-        let unit_metadata = llvm::LLVMRustDIBuilderCreateCompileUnit(
+        llvm::LLVMRustDIBuilderCreateCompileUnit(
             debug_context.builder.as_ref(),
             dwarf_const::DW_LANG_Rust,
             compile_unit_file,
@@ -1009,10 +1012,8 @@ pub(crate) fn build_compile_unit_di_node<'ll, 'tcx>(
             tcx.sess.opts.unstable_opts.split_dwarf_inlining,
             tcx.sess.opts.unstable_opts.debuginfo_for_profiling,
             debug_name_table_kind,
-        );
-
-        return unit_metadata;
-    };
+        )
+    }
 }
 
 /// Creates a `DW_TAG_member` entry inside the DIE represented by the given `type_di_node`.
@@ -1513,7 +1514,7 @@ fn build_generic_type_param_di_nodes<'ll, 'tcx>(
 pub(crate) fn build_global_var_di_node<'ll>(
     cx: &CodegenCx<'ll, '_>,
     def_id: DefId,
-    global: &'ll Value,
+    global: Value<'ll>,
 ) {
     if cx.dbg_cx.is_none() {
         return;
@@ -1722,7 +1723,7 @@ fn build_unsafe_binder_type_di_node<'ll, 'tcx>(
 /// global variable (which is simply returned), or an addrspacecast constant expression.
 /// If the given value is an addrspacecast, the cast is removed and the global variable behind
 /// the cast is returned.
-fn find_vtable_behind_cast<'ll>(vtable: &'ll Value) -> &'ll Value {
+fn find_vtable_behind_cast<'ll>(vtable: Value<'ll>) -> Value<'ll> {
     // The vtable is a global variable, which may be behind an addrspacecast.
     unsafe {
         if let Some(c) = llvm::LLVMIsAConstantExpr(vtable) {
@@ -1738,7 +1739,7 @@ pub(crate) fn apply_vcall_visibility_metadata<'ll, 'tcx>(
     cx: &CodegenCx<'ll, 'tcx>,
     ty: Ty<'tcx>,
     trait_ref: Option<ExistentialTraitRef<'tcx>>,
-    vtable: &'ll Value,
+    vtable: Value<'ll>,
 ) {
     // FIXME(flip1995): The virtual function elimination optimization only works with full LTO in
     // LLVM at the moment.
@@ -1803,7 +1804,7 @@ pub(crate) fn create_vtable_di_node<'ll, 'tcx>(
     cx: &CodegenCx<'ll, 'tcx>,
     ty: Ty<'tcx>,
     poly_trait_ref: Option<ty::ExistentialTraitRef<'tcx>>,
-    vtable: &'ll Value,
+    vtable: Value<'ll>,
 ) {
     if cx.dbg_cx.is_none() {
         return;
@@ -1858,7 +1859,7 @@ pub(crate) fn extend_scope_to_file<'ll>(
 }
 
 fn tuple_field_name(field_index: usize) -> Cow<'static, str> {
-    const TUPLE_FIELD_NAMES: [&'static str; 16] = [
+    const TUPLE_FIELD_NAMES: [&str; 16] = [
         "__0", "__1", "__2", "__3", "__4", "__5", "__6", "__7", "__8", "__9", "__10", "__11",
         "__12", "__13", "__14", "__15",
     ];

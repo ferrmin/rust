@@ -372,10 +372,12 @@ extern "C" LLVMTargetMachineRef LLVMRustCreateTargetMachine(
     return nullptr;
   }
 
-  TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(Trip);
-
 #if LLVM_VERSION_LT(24, 0)
+  TargetOptions Options = codegen::InitTargetOptionsFromCodeGenFlags(Trip);
   Options.FloatABIType = FloatABIType;
+#else
+  TargetOptions Options =
+      codegen::getTargetOptions(cl::getCAPILibraryOptions(), Trip);
 #endif
   Options.DataSections = DataSections;
   Options.FunctionSections = FunctionSections;
@@ -479,11 +481,23 @@ static CodeGenFileType fromRust(LLVMRustFileType Type) {
   }
 }
 
-extern "C" LLVMRustResult
-LLVMRustWriteOutputFile(LLVMTargetMachineRef Target, LLVMModuleRef M,
-                        const char *Path, const char *DwoPath,
-                        LLVMRustFileType RustFileType, bool VerifyIR,
-                        bool DisableSimplifyLibCalls) {
+extern "C" typedef llvm::PassPluginLibraryInfo (*LLVMGetPassPluginInfo)();
+
+enum class LLVMRustTpdeMode {
+  None,
+  Only,
+  Try,
+};
+
+struct LLVMRustTpdeOptions {
+  LLVMRustTpdeMode mode;
+  LLVMGetPassPluginInfo plugin;
+};
+
+extern "C" LLVMRustResult LLVMRustWriteOutputFile(
+    LLVMTargetMachineRef Target, LLVMModuleRef M, const char *Path,
+    const char *DwoPath, LLVMRustFileType RustFileType, bool VerifyIR,
+    bool DisableSimplifyLibCalls, LLVMRustTpdeOptions TpdeOptions) {
   auto FileType = fromRust(RustFileType);
 
   std::string ErrorInfo;
@@ -499,6 +513,22 @@ LLVMRustWriteOutputFile(LLVMTargetMachineRef Target, LLVMModuleRef M,
   std::unique_ptr<llvm::raw_pwrite_stream> DwoOS = nullptr;
   std::unique_ptr<llvm::raw_pwrite_stream> BDwoOS = nullptr;
   auto BOS = buffer_ostream(OS);
+
+  if (TpdeOptions.mode != LLVMRustTpdeMode::None) {
+    assert(
+        TpdeOptions.plugin &&
+        "rustc_codegen_llvm must set TpdeOptions.plugin if using -Zllvm-tpde");
+    llvm::PassPluginLibraryInfo plugin = TpdeOptions.plugin();
+    if (plugin.PreCodeGenCallback(*unwrap(M), *unwrap(Target), FileType, BOS)) {
+      return LLVMRustResult::Success;
+    } else if (TpdeOptions.mode == LLVMRustTpdeMode::Only) {
+      std::string error = "Failed to compile module " +
+                          unwrap(M)->getModuleIdentifier() + " with TPDE";
+      LLVMRustSetLastError(error.c_str());
+      return LLVMRustResult::Failure;
+    }
+  }
+
   if (DwoPath) {
     DwoOS = std::make_unique<raw_fd_ostream>(DwoPath, EC, sys::fs::OF_None);
     if (EC) {

@@ -2367,6 +2367,19 @@ pub(crate) fn clean_middle_ty<'tcx>(
                 ty
             }
         }
+        ty::View(def, args, fields) => {
+            let did = def.did();
+            let kind = match def.adt_kind() {
+                AdtKind::Struct => ItemType::Struct,
+                AdtKind::Union => ItemType::Union,
+                AdtKind::Enum => ItemType::Enum,
+            };
+            inline::record_extern_fqn(cx, did, kind);
+            let path =
+                Box::new(clean_middle_path(cx, did, false, ThinVec::new(), bound_ty.rebind(args)));
+            let fields = format!("{fields:?}").into_boxed_str();
+            Type::View(path, fields)
+        }
 
         ty::Closure(..) => panic!("Closure"),
         ty::CoroutineClosure(..) => panic!("CoroutineClosure"),
@@ -3059,7 +3072,9 @@ fn clean_impl<'tcx>(
     let items = impl_
         .items
         .iter()
-        .map(|&ii| clean_impl_item(tcx.hir_impl_item(ii), cx))
+        .map(|&ii| tcx.hir_impl_item(ii))
+        .filter(|item| !item.is_anon_const())
+        .map(|item| clean_impl_item(item, cx))
         .collect::<Vec<_>>();
 
     // If this impl block is a positive implementation of the Deref trait, then we

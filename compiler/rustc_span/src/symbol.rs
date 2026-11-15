@@ -133,6 +133,7 @@ symbols! {
         FieldOf:            "field_of",
         MacroRules:         "macro_rules",
         OffsetOf:           "offset_of",
+        PatternType:        "pattern_type",
         Pin:                "pin",
         Raw:                "raw",
         Reuse:              "reuse",
@@ -140,6 +141,7 @@ symbols! {
         TypeAscribe:        "type_ascribe",
         Union:              "union",
         UnwrapBinder:       "unwrap_binder",
+        ViewType:           "view_type",
         WrapBinder:         "wrap_binder",
         Yeet:               "yeet",
         // tidy-alphabetical-end
@@ -479,6 +481,7 @@ symbols! {
         assert_zero_valid,
         asserting,
         associated_const_equality,
+        associated_const_underscore,
         associated_consts,
         associated_type_bounds,
         associated_type_defaults,
@@ -1017,6 +1020,9 @@ symbols! {
         fmul_algebraic,
         fmul_fast,
         fmuladd,
+        fn_addr_addr_fn,
+        fn_addr_as_ptr,
+        fn_addr_trait,
         fn_align,
         fn_body,
         fn_delegation,
@@ -1024,7 +1030,6 @@ symbols! {
         fn_mut,
         fn_once,
         fn_once_output,
-        fn_ptr_as_ptr,
         fn_ptr_from_ptr,
         fn_ptr_trait,
         fn_static,
@@ -1608,7 +1613,6 @@ symbols! {
         path,
         pattern_complexity_limit,
         pattern_parentheses,
-        pattern_type,
         pattern_type_range_trait,
         pattern_types,
         phantom_data,
@@ -1730,6 +1734,7 @@ symbols! {
         ref_unwind_safe_trait,
         reference,
         reflect,
+        reflection_placeholder,
         reg,
         reg16,
         reg32,
@@ -1905,7 +1910,6 @@ symbols! {
         rustc_reallocator,
         rustc_regions,
         rustc_scalable_vector,
-        rustc_should_not_be_called_on_const_items,
         rustc_show_spans,
         rustc_simd_monomorphize_lane_limit,
         rustc_skip_during_method_dispatch,
@@ -2226,10 +2230,12 @@ symbols! {
         type_id_non_exhaustive,
         type_id_points_mutably,
         type_id_points_to,
+        type_id_reflected_attrs,
         type_id_size_of,
         type_id_type_of,
         type_id_variant_name,
         type_id_variant_non_exhaustive,
+        type_id_variant_reflected_attrs,
         type_id_variants,
         type_id_vtable,
         type_info,
@@ -2389,7 +2395,6 @@ symbols! {
         vgpr384,
         vgpr512,
         vgpr1024,
-        view_type,
         view_types,
         vis,
         visible_private_types,
@@ -3002,19 +3007,9 @@ pub mod kw {
 ///
 /// Given that `sym` is imported, use them like `sym::symbol_name`.
 /// For example `sym::rustfmt` or `sym::u8`.
-#[cfg_attr(
-    bootstrap,
-    diagnostic::on_unknown(
-        label = "`{Unresolved}` is not a pre-interned symbol",
-        note = "consider adding `{Unresolved}` to the `symbols!` invocation in compiler/rustc_span/src/symbol.rs"
-    )
-)]
-#[cfg_attr(
-    not(bootstrap),
-    diagnostic::on_unknown(
-        label = "`{unresolved}` is not a pre-interned symbol",
-        note = "consider adding `{unresolved}` to the `symbols!` invocation in compiler/rustc_span/src/symbol.rs"
-    )
+#[diagnostic::on_unknown(
+    label = "`{unresolved}` is not a pre-interned symbol",
+    note = "consider adding `{unresolved}` to the `symbols!` invocation in compiler/rustc_span/src/symbol.rs"
 )]
 pub mod sym {
     use super::Symbol;
